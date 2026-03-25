@@ -100,7 +100,48 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 7) index 최적화
+-- 7) foreign_flow / signal_weights / etf_mapping / signal_history 추가 (2026-03-26)
+CREATE TABLE IF NOT EXISTS foreign_flow (
+  id serial PRIMARY KEY,
+  as_of_date date NOT NULL,
+  market text NOT NULL CHECK (market IN ('KRX', 'US', 'GLOBAL')),
+  net_buy numeric(24,4) NOT NULL,
+  futures_position numeric(24,4) NOT NULL,
+  program_trading numeric(24,4) NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (as_of_date, market)
+);
+
+CREATE TABLE IF NOT EXISTS signal_weights (
+  id serial PRIMARY KEY,
+  factor text NOT NULL UNIQUE,
+  weight numeric(5,4) NOT NULL CHECK (weight >= 0 AND weight <= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS etf_mapping (
+  id serial PRIMARY KEY,
+  etf_code text NOT NULL UNIQUE,
+  related_index text NOT NULL,
+  sensitivity numeric(5,4) NOT NULL CHECK (sensitivity >= 0),
+  description text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signal_history (
+  id serial PRIMARY KEY,
+  etf_code text NOT NULL,
+  as_of_date date NOT NULL,
+  signal text NOT NULL CHECK (signal IN ('STRONG BUY', 'BUY', 'HOLD', 'SELL', 'STRONG SELL')),
+  predicted_score numeric(6,2),
+  actual_return numeric(8,4),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (etf_code, as_of_date)
+);
+
+-- 8) index 최적화
 CREATE INDEX IF NOT EXISTS idx_daily_indicators_market_date ON daily_indicators(market_master_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_ai_signals_market_date ON ai_signals(market_master_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_global_indicators_ts ON global_indicators(as_of_timestamp DESC);
