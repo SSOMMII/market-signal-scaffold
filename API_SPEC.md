@@ -19,14 +19,55 @@
 2. `GET /api/daily-indicators?marketMasterId={id}&date={YYYY-MM-DD}`
    - 기능: `getDailyIndicators` 호출
    - 응답: `{ data: DailyIndicator[] }`
-3. `POST /api/market-masters` (관리자)
+3. `GET /api/krx/etf/list`
+   - 기능: 국장 ETF 목록 제공
+   - 응답: `{ data: ETFInfo[] }`
+4. `GET /api/us/market?symbol={symbol}&range={1d,5d,1mo}`
+   - 기능: 미국 시장 가격/변동성 데이터
+   - 응답: `{ data: USMarketQuote }`
+5. `GET /api/economic/indicators?type={cpi,gdp,interest}`
+   - 기능: 거시 지표(물가, GDP, 금리) 데이터
+   - 응답: `{ data: EconomicIndicator[] }`
+6. `POST /api/market-masters` (관리자)
    - Body: `{ name, ticker, category, ... }`
    - 인증: 서버 전용 API 키 또는 JWT 토큰
-4. `POST /api/daily-indicators` (관리자)
+7. `POST /api/daily-indicators` (관리자)
    - Body: `{ marketMasterId, asOfDate, open, high, low, close, volume }`
    - 인증 필수
-5. `GET /api/statistics/summary` (선택)
+8. `GET /api/statistics/summary` (선택)
    - 권장: 캐시된 요약 데이터
+
+## 2-1. 필요 API 목록 (국장/미장)
+- `KRX`:
+  - 시가/고가/저가/종가/거래량
+  - 업종지수, 외인/기관/개인 순매수
+  - ETF 시그널, 배당, 펀드 순위
+- `미장`:
+  - S&P500, NASDAQ100, Dow Jones
+  - 종목별 OHLC, 선물/옵션 (ES, NQ, YM)
+  - 달러인덱스, 국채 10년 금리
+- 매칭/시차데이터:
+  - `국장 마감 + 미장 개장` / `미장 마감 + 국장 개장`
+  - 환율(원/달러), 금리, 국제유가, 반도체 지수
+- 서브 데이터:
+  - 뉴스 취합(네이버/다음/Reuters), 공시, 실적
+  - Sentiment (키워드, 바이럴 지표)
+
+## 2-2. 필요한 외부 API와 키
+- KRX Open API (국내 지수/ETF)
+  - `KRX_API_KEY` (또는 별도 인증 방식)
+- Alpha Vantage / Finnhub / Yahoo Finance (미국 시장)
+  - `ALPHAVANTAGE_API_KEY`
+  - `FINNHUB_API_KEY`
+- OpenAI (리포트, 요약)
+  - `OPENAI_API_KEY`
+- Supabase
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+- 인증/세션
+  - `JWT_SECRET`
+  - `NEXTAUTH_URL`
 
 ## 3. 키/환경 변수 목록
 ### Supabase
