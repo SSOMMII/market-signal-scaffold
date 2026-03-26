@@ -1,0 +1,24 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/fear-greed",
+      "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/cron/ape-wisdom",
+      "schedule": "10 0 * * *"
+    },
+    {
+      "path": "/api/cron/finnhub",
+      "schedule": "20 0 * * *"
+    },
+    {
+      "path": "/api/cron/kis",
+      "schedule": "0 7 * * 1-5"
+    },
+    {
+      "path": "/api/cron/ecos",
+      "schedule": "30 7 * * 1-5"
+    }
+  ]
+}

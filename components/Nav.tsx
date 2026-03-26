@@ -3,6 +3,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useMarket } from '@/context/MarketContext'
 import { SunIcon, MoonIcon } from '@/components/icons'
+import { useState } from 'react'
+import LoginModal from '@/components/AiBot/LoginModal'
 
 const links = [
   { href: '/',        label: '대시보드', icon: <IconChart /> },
@@ -111,8 +113,43 @@ function MarketToggle() {
   )
 }
 
+// UserButton: 버튼 UI만 담당, 로그인 state는 Nav로 이관
+function UserButton({
+  isLoggedIn,
+  onLoginClick,
+  onLogout,
+}: {
+  isLoggedIn: boolean
+  onLoginClick: () => void
+  onLogout: () => void
+}) {
+  return isLoggedIn ? (
+    <button
+      onClick={onLogout}
+      className="flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+      title="로그아웃"
+    >
+      <div className="h-6 w-6 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold text-white">
+        S
+      </div>
+      <span className="text-xs font-semibold">SSOMMII</span>
+    </button>
+  ) : (
+    <button
+      onClick={onLoginClick}
+      className="flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+    >
+      <IconUser />
+      <span className="text-xs font-medium">로그인</span>
+    </button>
+  )
+}
+
 export default function Nav() {
   const pathname = usePathname()
+  // 로그인 state를 Nav 레벨에서 관리 → LoginModal을 header 밖에서 렌더
+  const [showLogin, setShowLogin] = useState(false)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
 
   return (
     <>
@@ -152,8 +189,15 @@ export default function Nav() {
             ))}
           </nav>
 
-          {/* Market Toggle (right) */}
-          <MarketToggle />
+          {/* Right actions */}
+          <div className="flex items-center gap-3">
+            <MarketToggle />
+            <UserButton
+              isLoggedIn={isLoggedIn}
+              onLoginClick={() => setShowLogin(true)}
+              onLogout={() => setIsLoggedIn(false)}
+            />
+          </div>
         </div>
       </header>
 
@@ -178,6 +222,14 @@ export default function Nav() {
           </Link>
         ))}
       </nav>
+
+      {/* LoginModal: header/nav 바깥에서 렌더 → backdrop-blur stacking context 탈출 */}
+      {showLogin && (
+        <LoginModal
+          onClose={() => setShowLogin(false)}
+          onLogin={() => { setIsLoggedIn(true); setShowLogin(false) }}
+        />
+      )}
     </>
   )
 }

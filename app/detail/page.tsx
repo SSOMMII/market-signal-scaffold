@@ -47,7 +47,7 @@ export default function DetailPage() {
             <p className="text-sm opacity-80 leading-relaxed max-w-md whitespace-pre-line">
               {d.predictionSub}
             </p>
-            <div className="flex items-center gap-4 pt-1">
+            <div className="flex flex-wrap items-center gap-2 pt-1">
               {d.stats.map(({ label, value }) => (
                 <div key={label} className="rounded-xl bg-white/10 px-3 py-2 text-center">
                   <p className="text-[10px] opacity-60">{label}</p>
@@ -73,12 +73,12 @@ export default function DetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
+      <div className="flex gap-1.5 bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
         {tabs.map((tab, i) => (
           <button
             key={tab}
             onClick={() => setActiveTab(i)}
-            className={`flex-1 rounded-lg py-2 text-sm font-medium transition-all ${
+            className={`flex-1 rounded-lg py-2 text-xs sm:text-sm font-medium transition-all ${
               activeTab === i
                 ? `${accentBg} text-white shadow-sm`
                 : 'text-slate-500 hover:text-slate-900'
@@ -92,7 +92,7 @@ export default function DetailPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
 
-          {/* ETF Signal Table */}
+          {/* ETF Signal List */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
               <div>
@@ -101,7 +101,44 @@ export default function DetailPage() {
               </div>
               <span className="badge-up">실시간</span>
             </div>
-            <div className="overflow-x-auto">
+
+            {/* Mobile: 카드 목록 */}
+            <div className="md:hidden divide-y divide-slate-100">
+              {d.etfDetailList.map(({ ticker, name, price, change, volume, signal, score, up }) => (
+                <div key={ticker} className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900 text-sm leading-tight truncate">{name}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">{ticker} · 거래량 {volume}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
+                      signal === '매수' ? 'bg-emerald-50 text-emerald-600' :
+                      signal === '관망' ? 'bg-slate-100 text-slate-500' :
+                      'bg-amber-50 text-amber-600'
+                    }`}>{signal}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono font-semibold text-slate-800 text-sm">{price}</span>
+                    <span className={`text-sm font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{change}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 w-14 shrink-0">AI Score</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${score > 0 ? 'bg-emerald-500' : 'bg-red-400'}`}
+                        style={{ width: `${Math.min(Math.abs(score) / 4 * 100, 100)}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-bold w-8 text-right shrink-0 ${score > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {score > 0 ? '+' : ''}{score}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop: 테이블 */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100">

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import Nav from '@/components/Nav'
 import { MarketProvider } from '@/context/MarketContext'
+import AiBotPanel from '@/components/AiBot/AiBotPanel'
 
 export const metadata: Metadata = {
   title: 'Global Market Bridge AI',
@@ -21,6 +22,7 @@ export default function RootLayout({
           <main className="pt-14 pb-20 md:pt-16 md:pb-8">
             {children}
           </main>
+          <AiBotPanel />
         </MarketProvider>
       </body>
     </html>
