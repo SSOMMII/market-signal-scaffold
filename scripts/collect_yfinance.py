@@ -23,36 +23,117 @@ except ImportError:
     print("설치: pip install yfinance pandas", file=sys.stderr)
     sys.exit(1)
 
+try:
+    import ta as _ta
+    _HAS_TA = True
+except ImportError:
+    _HAS_TA = False
+    print("[WARN] ta 미설치 → 기술적 지표 계산 생략. 설치: pip install ta", file=sys.stderr)
+
 # 수집 대상 종목 목록
 TARGETS = {
     'ETF': ['QQQ', 'SPY', 'IWM', 'GLD', 'TLT', 'SOXL', 'TQQQ'],
-    'INDEX': ['^GSPC', '^IXIC', '^DJI', '^VIX', '^KS11'],   # S&P500, 나스닥, 다우, VIX, KOSPI
-    'FUTURES': ['NQ=F', 'ES=F', 'YM=F'],                      # 나스닥/S&P/다우 선물
-    'FX': ['USDKRW=X', 'EURUSD=X', 'JPY=X'],                 # 원달러, 유로달러, 달러엔
-    'COMMODITY': ['GC=F', 'CL=F'],                             # 금/WTI 원유 선물
+    'INDEX': ['^GSPC', '^IXIC', '^DJI', '^VIX', '^KS11', '^KQ11'],  # KOSDAQ 추가
+    'FUTURES': ['NQ=F', 'ES=F', 'YM=F'],
+    'FX': ['USDKRW=X', 'EURUSD=X', 'JPY=X'],
+    'COMMODITY': ['GC=F', 'CL=F'],
 }
+
+# 지표 계산에 필요한 최소 데이터 기간 (SMA200 기준)
+_INDICATOR_FETCH_PERIOD = '1y'
+
+
+def _compute_indicators(hist: 'pd.DataFrame') -> 'pd.DataFrame':
+    """ta 라이브러리로 기술적 지표 계산"""
+    if not _HAS_TA or hist.empty:
+        return hist
+
+    close = hist['Close']
+    high  = hist['High']
+    low   = hist['Low']
+
+    # RSI(14)
+    hist['rsi'] = _ta.momentum.RSIIndicator(close, window=14).rsi()
+
+    # MACD(12,26,9)
+    macd_obj = _ta.trend.MACD(close, window_fast=12, window_slow=26, window_sign=9)
+    hist['macd']        = macd_obj.macd()
+    hist['signal_line'] = macd_obj.macd_signal()
+
+    # SMA
+    hist['sma_50']  = _ta.trend.SMAIndicator(close, window=50).sma_indicator()
+    hist['sma_120'] = _ta.trend.SMAIndicator(close, window=120).sma_indicator()
+    hist['sma_200'] = _ta.trend.SMAIndicator(close, window=200).sma_indicator()
+
+    # Bollinger Bands(20, 2)
+    bb = _ta.volatility.BollingerBands(close, window=20, window_dev=2)
+    hist['bollinger_upper']  = bb.bollinger_hband()
+    hist['bollinger_middle'] = bb.bollinger_mavg()
+    hist['bollinger_lower']  = bb.bollinger_lband()
+
+    # Stochastic(14, 3)
+    stoch = _ta.momentum.StochasticOscillator(high, low, close, window=14, smooth_window=3)
+    hist['stoch_k'] = stoch.stoch()
+    hist['stoch_d'] = stoch.stoch_signal()
+
+    return hist
+
+
+def _period_to_rows(period: str) -> int:
+    """period 문자열 → 거래일(행) 수 근사값"""
+    if period.endswith('d'):
+        return int(period[:-1])
+    if period.endswith('mo'):
+        return int(period[:-2]) * 22
+    if period.endswith('y'):
+        return int(period[:-1]) * 252
+    return 252  # 알 수 없는 경우 1년치
+
+
+def _row_to_record(symbol: str, ts, row) -> dict:
+    return {
+        'symbol':           symbol,
+        'date':             str(ts.date()),
+        'open':             _safe_float(row.get('Open')),
+        'high':             _safe_float(row.get('High')),
+        'low':              _safe_float(row.get('Low')),
+        'close':            _safe_float(row.get('Close')),
+        'volume':           _safe_int(row.get('Volume')),
+        'rsi':              _safe_float(row.get('rsi')),
+        'macd':             _safe_float(row.get('macd')),
+        'signal_line':      _safe_float(row.get('signal_line')),
+        'sma_50':           _safe_float(row.get('sma_50')),
+        'sma_120':          _safe_float(row.get('sma_120')),
+        'sma_200':          _safe_float(row.get('sma_200')),
+        'bollinger_upper':  _safe_float(row.get('bollinger_upper')),
+        'bollinger_middle': _safe_float(row.get('bollinger_middle')),
+        'bollinger_lower':  _safe_float(row.get('bollinger_lower')),
+        'stoch_k':          _safe_float(row.get('stoch_k')),
+        'stoch_d':          _safe_float(row.get('stoch_d')),
+    }
 
 
 def collect_ohlcv(period: str = '5d') -> list[dict]:
-    """기간(period) 기반 수집 (예: '5d', '1mo', '3mo')"""
+    """기간(period) 기반 수집 — 지표 계산을 위해 내부적으로 1년치 데이터 사용"""
     results = []
     all_symbols = [s for group in TARGETS.values() for s in group]
+    req_rows = _period_to_rows(period)
 
     for symbol in all_symbols:
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period=period, auto_adjust=True)
+            # 지표 계산용으로 항상 1년치 fetch
+            hist = ticker.history(period=_INDICATOR_FETCH_PERIOD, auto_adjust=True)
+            if hist.empty:
+                continue
 
-            for ts, row in hist.iterrows():
-                results.append({
-                    'symbol': symbol,
-                    'date': str(ts.date()),
-                    'open': _safe_float(row.get('Open')),
-                    'high': _safe_float(row.get('High')),
-                    'low': _safe_float(row.get('Low')),
-                    'close': _safe_float(row.get('Close')),
-                    'volume': _safe_int(row.get('Volume')),
-                })
+            hist = _compute_indicators(hist)
+
+            # 요청된 기간만 반환
+            hist_sliced = hist.tail(req_rows)
+            for ts, row in hist_sliced.iterrows():
+                results.append(_row_to_record(symbol, ts, row))
+
         except Exception as e:
             print(f"[WARN] {symbol}: {e}", file=sys.stderr)
 
@@ -64,21 +145,24 @@ def collect_by_date(start_date: str, end_date: str) -> list[dict]:
     results = []
     all_symbols = [s for group in TARGETS.values() for s in group]
 
+    # 지표 계산용 fetch start (300 캘린더일 앞)
+    from datetime import datetime
+    fetch_start = (datetime.strptime(start_date, '%Y-%m-%d') - timedelta(days=300)).strftime('%Y-%m-%d')
+
     for symbol in all_symbols:
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(start=start_date, end=end_date, auto_adjust=True)
+            hist = ticker.history(start=fetch_start, end=end_date, auto_adjust=True)
+            if hist.empty:
+                continue
 
-            for ts, row in hist.iterrows():
-                results.append({
-                    'symbol': symbol,
-                    'date': str(ts.date()),
-                    'open': _safe_float(row.get('Open')),
-                    'high': _safe_float(row.get('High')),
-                    'low': _safe_float(row.get('Low')),
-                    'close': _safe_float(row.get('Close')),
-                    'volume': _safe_int(row.get('Volume')),
-                })
+            hist = _compute_indicators(hist)
+
+            # 요청된 날짜 범위만 반환
+            hist_sliced = hist[hist.index >= pd.Timestamp(start_date)]
+            for ts, row in hist_sliced.iterrows():
+                results.append(_row_to_record(symbol, ts, row))
+
         except Exception as e:
             print(f"[WARN] {symbol}: {e}", file=sys.stderr)
 

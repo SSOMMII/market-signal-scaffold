@@ -2,13 +2,22 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeftIcon, SparklesIcon } from '@/components/icons'
-import { tabs, sectorData, etfDetailList, indicatorDetail, aiReportTabs } from '@/lib/detailData'
-
-
+import { useMarket } from '@/context/MarketContext'
+import { tabs, krDetailData, usDetailData, aiReportTabs } from '@/lib/detailData'
 
 export default function DetailPage() {
+  const { market } = useMarket()
+  const isKr = market === 'kr'
+  const d = isKr ? krDetailData : usDetailData
+
   const [activeTab, setActiveTab] = useState(0)
   const [reportTab, setReportTab] = useState(0)
+
+  const today = new Date().toLocaleDateString('ko-KR', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).replace(/\. /g, '.').replace('.', '.')
+
+  const accentBg = isKr ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-violet-600 hover:bg-violet-700'
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
@@ -20,55 +29,50 @@ export default function DetailPage() {
         </Link>
         <div>
           <h1 className="text-xl font-bold text-slate-900">상세 분석</h1>
-          <p className="text-xs text-slate-400">국장 → 미장 심층 리포트</p>
+          <p className="text-xs text-slate-400">{isKr ? '국장 → 미장 심층 리포트' : '미장 → 국장 심층 리포트'}</p>
         </div>
       </div>
 
       {/* Prediction Summary Banner */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-700 p-6 text-white">
+      <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-r ${d.gradientClass} p-6 text-white`}>
         <div className="absolute inset-0 opacity-10"
           style={{ backgroundImage: 'radial-gradient(circle at 20% 50%, white 1px, transparent 1px), radial-gradient(circle at 80% 20%, white 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
         <div className="relative flex items-start justify-between">
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <SparklesIcon />
-              <span className="text-xs font-semibold text-indigo-200">AI 예측 분석 · 2025.03.25</span>
+              <span className="text-xs font-semibold opacity-70">AI 예측 분석 · {today}</span>
             </div>
-            <h2 className="text-2xl font-bold">나스닥 상승 확률 82%</h2>
-            <p className="text-sm text-indigo-200 leading-relaxed max-w-md">
-              코스피 외국인 순매수 +2,340억 유입. 반도체·AI 섹터 강세가 미장 상승을 견인할 전망.
-              달러인덱스(DXY) 104.2 안정, 국채금리 소폭 하락으로 기술주에 우호적 환경.
+            <h2 className="text-2xl font-bold">{d.predictionTitle}</h2>
+            <p className="text-sm opacity-80 leading-relaxed max-w-md whitespace-pre-line">
+              {d.predictionSub}
             </p>
             <div className="flex items-center gap-4 pt-1">
-              {[
-                { label: '코스피 외인', value: '+2,340억' },
-                { label: '환율',       value: '1,320원'  },
-                { label: '나스닥 선물', value: '+0.31%'  },
-              ].map(({ label, value }) => (
+              {d.stats.map(({ label, value }) => (
                 <div key={label} className="rounded-xl bg-white/10 px-3 py-2 text-center">
-                  <p className="text-[10px] text-indigo-300">{label}</p>
+                  <p className="text-[10px] opacity-60">{label}</p>
                   <p className="text-sm font-bold">{value}</p>
                 </div>
               ))}
             </div>
           </div>
-          <div className="hidden md:flex flex-col items-center justify-center h-28 w-28 rounded-full bg-white/10 border-4 border-white/20">
-            <p className="text-3xl font-black">82%</p>
-            <p className="text-[10px] text-indigo-300 text-center leading-tight">상승<br/>예측</p>
+          <div className="hidden md:flex flex-col items-center justify-center h-28 w-28 rounded-full bg-white/10 border-4 border-white/20 shrink-0">
+            <p className="text-3xl font-black">{d.predictionPct}%</p>
+            <p className="text-[10px] opacity-60 text-center leading-tight">상승<br/>예측</p>
           </div>
         </div>
         {/* Progress bar */}
         <div className="mt-4">
-          <div className="flex justify-between text-[10px] text-indigo-300 mb-1">
+          <div className="flex justify-between text-[10px] opacity-60 mb-1">
             <span>하락</span><span>상승</span>
           </div>
           <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
-            <div className="h-full rounded-full bg-white/80" style={{ width: '82%' }} />
+            <div className="h-full rounded-full bg-white/80 transition-all duration-700" style={{ width: `${d.predictionPct}%` }} />
           </div>
         </div>
       </div>
 
-      {/* Tabs: 일간/주간/섹터별/커스텀 */}
+      {/* Tabs */}
       <div className="flex gap-2 bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
         {tabs.map((tab, i) => (
           <button
@@ -76,7 +80,7 @@ export default function DetailPage() {
             onClick={() => setActiveTab(i)}
             className={`flex-1 rounded-lg py-2 text-sm font-medium transition-all ${
               activeTab === i
-                ? 'bg-indigo-600 text-white shadow-sm'
+                ? `${accentBg} text-white shadow-sm`
                 : 'text-slate-500 hover:text-slate-900'
             }`}
           >
@@ -109,7 +113,7 @@ export default function DetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {etfDetailList.map(({ ticker, name, price, change, volume, signal, score, up }) => (
+                  {d.etfDetailList.map(({ ticker, name, price, change, volume, signal, score, up }) => (
                     <tr key={ticker} className="hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3">
                         <p className="font-semibold text-slate-900 text-sm leading-tight">{name}</p>
@@ -152,7 +156,7 @@ export default function DetailPage() {
               <p className="text-xs text-slate-400">각 지표별 현재 신호 및 해석</p>
             </div>
             <div className="p-5 space-y-4">
-              {indicatorDetail.map(({ label, value, max, badge, cls, desc, color }) => (
+              {d.indicatorDetail.map(({ label, value, max, badge, cls, desc, color }) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-4">
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-semibold text-slate-800 text-sm">{label}</p>
@@ -181,7 +185,7 @@ export default function DetailPage() {
               <p className="text-xs text-slate-400">AI 섹터 스코어 (0~100)</p>
             </div>
             <div className="p-4 space-y-3">
-              {sectorData.map(({ name, score, change, up }) => (
+              {d.sectorData.map(({ name, score, change, up }) => (
                 <div key={name}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium text-slate-700">{name}</span>
@@ -215,7 +219,7 @@ export default function DetailPage() {
                   key={t}
                   onClick={() => setReportTab(i)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                    reportTab === i ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    reportTab === i ? `${accentBg} text-white` : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                   }`}
                 >
                   {t}
@@ -225,40 +229,11 @@ export default function DetailPage() {
 
             <div className="p-4 space-y-3">
               <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600 leading-relaxed border border-slate-100">
-                {reportTab === 0 && (
-                  <p>
-                    <strong className="text-slate-900">📊 일간 시장 요약</strong><br /><br />
-                    코스피는 외국인 순매수 +2,340억을 기반으로 0.81% 상승 마감. 반도체·AI 관련주 강세가
-                    두드러졌으며, 삼성전자와 SK하이닉스가 각각 1.2%, 2.1% 상승. 코스닥도 바이오·엔터주 주도로
-                    1.07% 상승. 오늘 밤 나스닥은 82% 확률로 상승 전망.
-                  </p>
-                )}
-                {reportTab === 1 && (
-                  <p>
-                    <strong className="text-slate-900">📅 주간 시장 전망</strong><br /><br />
-                    이번 주 FOMC 의사록 발표 예정. 금리 동결 기조 유지 전망으로 기술주 중심 상승 흐름 예상.
-                    엔비디아 실적 발표(목)가 나스닥 방향성을 결정할 핵심 변수. 코스피는 2,700~2,750 박스권 전망.
-                  </p>
-                )}
-                {reportTab === 2 && (
-                  <p>
-                    <strong className="text-slate-900">🏭 섹터 분석</strong><br /><br />
-                    반도체 섹터(Score 92) 최강세. HBM 수요 급증으로 SK하이닉스 목표가 상향 다수.
-                    엔터 섹터(Score 81) 일본·동남아 팬덤 확장으로 하이브·JYP 매출 성장세 지속.
-                    2차전지(Score 58) 전기차 수요 둔화 우려로 관망 권고.
-                  </p>
-                )}
-                {reportTab === 3 && (
-                  <p>
-                    <strong className="text-slate-900">⚙️ 커스텀 분석</strong><br /><br />
-                    포트폴리오 기반 맞춤 분석: NVDA(30%) 비중이 높아 실적 발표 리스크 존재.
-                    삼성전자(25%)는 단기 조정 후 반등 구간 진입. AAPL(25%)은 AI 피처 기대감으로 강보합.
-                    전체 리스크 스코어 65/100 — 보통 수준, 분산투자 권장.
-                  </p>
-                )}
+                <strong className="text-slate-900 block mb-2">{d.reportContent[reportTab].title}</strong>
+                <p>{d.reportContent[reportTab].body}</p>
               </div>
               <Link href="/history"
-                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">
+                className={`flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-white transition-colors ${accentBg}`}>
                 <SparklesIcon />
                 새 리포트 생성
               </Link>

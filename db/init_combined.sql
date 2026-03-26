@@ -1,7 +1,17 @@
--- DB schema for Global Market Bridge AI
--- from PRD Global Market Bridge AI (v1.0)
+-- ============================================================
+-- Global Market Bridge AI — Supabase SQL Editor용 통합 초기화
+-- 사용법: 이 파일 전체를 Supabase SQL Editor에 붙여넣고 실행
+-- ============================================================
 
--- 1) Market master information
+-- 1) Extensions
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS citext;
+
+-- ============================================================
+-- 2) Tables (schema.sql 내용)
+-- ============================================================
+
+-- market_master: 종목/ETF/인덱스 마스터
 CREATE TABLE IF NOT EXISTS market_master (
   id serial PRIMARY KEY,
   symbol text NOT NULL,
@@ -16,7 +26,7 @@ CREATE TABLE IF NOT EXISTS market_master (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 2) Daily indicators (가격 + 기술적 지표) 
+-- daily_indicators: OHLCV + 기술적 지표
 CREATE TABLE IF NOT EXISTS daily_indicators (
   id serial PRIMARY KEY,
   market_master_id integer NOT NULL REFERENCES market_master(id) ON DELETE CASCADE,
@@ -42,7 +52,7 @@ CREATE TABLE IF NOT EXISTS daily_indicators (
   UNIQUE (market_master_id, as_of_date)
 );
 
--- 3) AI signals output
+-- ai_signals: AI 예측 신호 출력
 CREATE TABLE IF NOT EXISTS ai_signals (
   id serial PRIMARY KEY,
   market_master_id integer NOT NULL REFERENCES market_master(id) ON DELETE CASCADE,
@@ -62,7 +72,7 @@ CREATE TABLE IF NOT EXISTS ai_signals (
   UNIQUE (market_master_id, as_of_date, source)
 );
 
--- 4) User alerts/preferences
+-- user_alerts: 사용자 알림 설정
 CREATE TABLE IF NOT EXISTS user_alerts (
   id serial PRIMARY KEY,
   user_id uuid NOT NULL,
@@ -76,7 +86,7 @@ CREATE TABLE IF NOT EXISTS user_alerts (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 5) Global indicators for dashboard
+-- global_indicators: 글로벌 시장 스냅샷
 CREATE TABLE IF NOT EXISTS global_indicators (
   id serial PRIMARY KEY,
   as_of_timestamp timestamptz NOT NULL,
@@ -90,9 +100,9 @@ CREATE TABLE IF NOT EXISTS global_indicators (
   UNIQUE (as_of_timestamp)
 );
 
--- 6) 사용자 테이블 기본 (추가 설계)
+-- users: 사용자 테이블
 CREATE TABLE IF NOT EXISTS users (
-  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text UNIQUE NOT NULL,
   display_name text,
   locale text DEFAULT 'ko-KR',
@@ -100,7 +110,7 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 7) foreign_flow / signal_weights / etf_mapping / signal_history 추가 (2026-03-26)
+-- foreign_flow: 외국인 순매수
 CREATE TABLE IF NOT EXISTS foreign_flow (
   id serial PRIMARY KEY,
   as_of_date date NOT NULL,
@@ -112,6 +122,7 @@ CREATE TABLE IF NOT EXISTS foreign_flow (
   UNIQUE (as_of_date, market)
 );
 
+-- signal_weights: AI 점수 가중치
 CREATE TABLE IF NOT EXISTS signal_weights (
   id serial PRIMARY KEY,
   factor text NOT NULL UNIQUE,
@@ -120,6 +131,7 @@ CREATE TABLE IF NOT EXISTS signal_weights (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- etf_mapping: ETF-인덱스 매핑
 CREATE TABLE IF NOT EXISTS etf_mapping (
   id serial PRIMARY KEY,
   etf_code text NOT NULL UNIQUE,
@@ -130,6 +142,7 @@ CREATE TABLE IF NOT EXISTS etf_mapping (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- signal_history: 예측 정확도 추적
 CREATE TABLE IF NOT EXISTS signal_history (
   id serial PRIMARY KEY,
   etf_code text NOT NULL,
@@ -141,7 +154,7 @@ CREATE TABLE IF NOT EXISTS signal_history (
   UNIQUE (etf_code, as_of_date)
 );
 
--- 8) 감성 분석 캐시 (AI Pipeline Design M3)
+-- sentiment_cache: 감성 분석 캐시 (AI Pipeline M3)
 CREATE TABLE IF NOT EXISTS sentiment_cache (
   id                 BIGSERIAL PRIMARY KEY,
   ticker             TEXT        NOT NULL,
@@ -153,7 +166,7 @@ CREATE TABLE IF NOT EXISTS sentiment_cache (
   UNIQUE(ticker, date)
 );
 
--- 9) AI 예측 결과 (AI Pipeline Design M5~M6)
+-- ai_predictions: AI 예측 결과 (AI Pipeline M5~M6)
 CREATE TABLE IF NOT EXISTS ai_predictions (
   id              BIGSERIAL PRIMARY KEY,
   ticker          TEXT        NOT NULL,
@@ -161,15 +174,28 @@ CREATE TABLE IF NOT EXISTS ai_predictions (
   signal_score    INT         NOT NULL,  -- 0~100
   signal_label    TEXT        NOT NULL CHECK (signal_label IN ('STRONG_BUY','BUY','HOLD','SELL','STRONG_SELL')),
   lgbm_prob       FLOAT,
-  contributions   JSONB,                 -- top_contributors 배열
-  breakdown       JSONB,                 -- 카테고리별 기여 수치
+  contributions   JSONB,
+  breakdown       JSONB,
   summary_text    TEXT,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(ticker, date)
 );
 
--- 10) index 최적화
+-- ============================================================
+-- 3) Indexes
+-- ============================================================
 CREATE INDEX IF NOT EXISTS idx_daily_indicators_market_date ON daily_indicators(market_master_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_ai_signals_market_date ON ai_signals(market_master_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_global_indicators_ts ON global_indicators(as_of_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_user_alerts_user ON user_alerts(user_id);
+
+-- ============================================================
+-- 4) 기본 마스터 데이터 샘플
+-- ============================================================
+INSERT INTO market_master (symbol, name, market_type, asset_type, region, currency, sector, tags)
+VALUES
+  ('KOSPI',  'KOSPI Composite Index', 'KR',     'INDEX', 'KR', 'KRW', 'Index', ARRAY['KOSPI','INDEX']),
+  ('KOSDAQ', 'KOSDAQ Composite Index','KR',     'INDEX', 'KR', 'KRW', 'Index', ARRAY['KOSDAQ','INDEX']),
+  ('SPX',    'S&P 500',               'US',     'INDEX', 'US', 'USD', 'Index', ARRAY['S&P500','INDEX']),
+  ('NDX',    'NASDAQ 100',            'US',     'INDEX', 'US', 'USD', 'Index', ARRAY['NASDAQ','INDEX'])
+ON CONFLICT DO NOTHING;

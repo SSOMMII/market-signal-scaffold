@@ -15,7 +15,7 @@ Global Market Bridge AI는 국내(국장)/미국(미장) 시장 데이터를 통
 1. 메인 대시보드
   - Night Insight (미장 → 국장)
   - Day Insight (국장 → 미장)
-  - Today’s Signal Top ETF
+  - Today's Signal Top ETF
   - Global Dashboard (S&P500, NASDAQ, VIX, WTI, USD/KRW)
 
 2. 상세 페이지

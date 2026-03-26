@@ -1,6 +1,8 @@
 'use client'
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 import { useMarket } from '@/context/MarketContext'
+import { krData, usData, type StripItem, type IndicatorItem } from '@/lib/marketData'
 import { MiniChart } from '@/components/MiniChart'
 import {
   TrendingUpIcon,
@@ -10,122 +12,168 @@ import {
   ChevronRightIcon,
 } from '@/components/icons'
 
-// ── 국장 (Korean market) data ─────────────────────────────────────────────────
-const krData = {
-  statusTitle: '한국 증시',
-  statusSub: 'KOSPI / KOSDAQ',
-  statusBadge: '거래중',
-  insightTitle: 'Day Insight',
-  insightSub: '국장 → 미장 예측',
-  insightDir: '상승 예상',
-  insightConf: 82,
-  insightText: '코스피 외국인 순매수 유입. 반도체 섹터 강세 지속으로 나스닥 상승 예상. 달러 안정세 긍정적. 야간 선물 +0.3% 기반 상승 출발 전망.',
-  insightStats: [
-    { label: '코스피', value: '+0.8%' },
-    { label: '외국인', value: '+2,340억' },
-    { label: '환율',   value: '1,320원' },
-  ],
-  index1: { name: 'KOSPI', sub: '한국 대표 지수', value: '2,720', change: '+21.8 (+0.81%)', data: [2680,2695,2710,2698,2720,2715,2730,2720], color: '#6366f1', ohlc: [['시가','2,695'],['고가','2,735'],['저가','2,690']] },
-  index2: { name: 'KOSDAQ', sub: '중소형 성장 지수', value: '891', change: '+9.4 (+1.07%)', data: [870,878,885,880,892,888,895,891], color: '#a855f7', ohlc: [['시가','878'],['고가','896'],['저가','876']] },
-  globalStrip: [
-    { name: 'S&P 500', value: '5,248',  change: '+0.74%', up: true  },
-    { name: 'NASDAQ',  value: '16,382', change: '+1.12%', up: true  },
-    { name: 'DOW',     value: '38,905', change: '+0.23%', up: true  },
-    { name: 'VIX',     value: '14.2',   change: '-5.3%',  up: false },
-    { name: 'WTI',     value: '$82.4',  change: '-0.8%',  up: false },
-    { name: 'Gold',    value: '$2,318', change: '+0.6%',  up: true  },
-  ],
-  stripPreview: [
-    { name: 'S&P 500', value: '5,248',  change: '+0.74%', up: true },
-    { name: 'NASDAQ',  value: '16,382', change: '+1.12%', up: true },
-    { name: 'DOW',     value: '38,905', change: '+0.23%', up: true },
-  ],
-  signals: [
-    { ticker: '360750', name: 'TIGER 미국S&P500', change: '+1.8%', score: '+2.4', action: '매수', up: true },
-    { ticker: '305720', name: 'KODEX 반도체',     change: '+2.3%', score: '+3.1', action: '매수', up: true },
-    { ticker: '114800', name: 'KODEX 인버스',     change: '-0.9%', score: '-1.7', action: '관망', up: false },
-    { ticker: '229200', name: 'KODEX 코스닥150',  change: '+1.1%', score: '+1.5', action: '매수', up: true },
-  ],
-  indicators: [
-    { label: 'RSI (14)',   value: '42.5',  sub: '중립 구간',   badge: '중립', cls: 'badge-hold' },
-    { label: 'MACD',      value: '+12',   sub: '골든크로스',  badge: '매수', cls: 'badge-up'   },
-    { label: '이동평균',  value: '2,698', sub: '120MA 상회',  badge: '상승', cls: 'badge-up'   },
-    { label: '볼린저밴드',value: '중단',  sub: '밴드 수렴',   badge: '중립', cls: 'badge-hold' },
-    { label: '스토캐스틱',value: '68.3',  sub: '과매수 근접', badge: '주의', cls: 'badge-hold' },
-    { label: '거래량',    value: '↑28%',  sub: '평균 대비',   badge: '강세', cls: 'badge-up'   },
-  ],
-  portfolio: [
-    { code: 'AAPL',   name: 'Apple Inc.',      pct: 25, color: 'bg-blue-500',   profit: '+4.2%' },
-    { code: 'NVDA',   name: 'NVIDIA Corp.',    pct: 30, color: 'bg-purple-500', profit: '+11.7%' },
-    { code: '005930', name: '삼성전자',        pct: 25, color: 'bg-cyan-500',   profit: '-1.3%' },
-    { code: 'MSFT',   name: 'Microsoft Corp.', pct: 20, color: 'bg-indigo-500', profit: '+2.9%' },
-  ],
-  accentColor: 'bg-indigo-50 text-indigo-600',
-  accentBg: 'bg-indigo-600 hover:bg-indigo-700',
-  gradientFrom: 'from-indigo-600',
-  gradientTo: 'to-purple-600',
+// ── 포맷 헬퍼 ──────────────────────────────────────────────────────────
+function fmt0(v: number | null) { return v ? Math.round(v).toLocaleString() : '-' }
+function fmt1(v: number | null) { return v ? v.toFixed(1) : '-' }
+function fmt2(v: number | null) { return v ? v.toFixed(2) : '-' }
+function fmtPct(v: number | null) {
+  if (v == null) return '-'
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
 }
 
-// ── 미장 (US market) data ─────────────────────────────────────────────────────
-const usData = {
-  statusTitle: '미국 증시',
-  statusSub: 'S&P 500 / NASDAQ',
-  statusBadge: '야간장',
-  insightTitle: 'Night Insight',
-  insightSub: '미장 → 국장 예측',
-  insightDir: '상승 예상',
-  insightConf: 76,
-  insightText: '엔비디아 실적 서프라이즈 기대감. AI 인프라 투자 확대 기조 유지. 10년물 국채금리 소폭 하락, 기술주 밸류에이션 부담 완화. 내일 코스피 상승 출발 전망.',
-  insightStats: [
-    { label: 'S&P 500',  value: '+0.74%' },
-    { label: 'NASDAQ',   value: '+1.12%' },
-    { label: 'DXY',      value: '104.2'  },
-  ],
-  index1: { name: 'S&P 500', sub: '미국 대표 지수', value: '5,248', change: '+38.5 (+0.74%)', data: [5180,5195,5210,5200,5230,5220,5248,5248], color: '#8b5cf6', ohlc: [['시가','5,200'],['고가','5,260'],['저가','5,188']] },
-  index2: { name: 'NASDAQ', sub: '기술주 중심 지수', value: '16,382', change: '+182 (+1.12%)', data: [16100,16150,16200,16180,16300,16280,16382,16382], color: '#06b6d4', ohlc: [['시가','16,180'],['고가','16,420'],['저가','16,090']] },
-  globalStrip: [
-    { name: 'KOSPI',  value: '2,720', change: '+0.81%', up: true  },
-    { name: 'KOSDAQ', value: '891',   change: '+1.07%', up: true  },
-    { name: 'Nikkei', value: '40,168',change: '+0.55%', up: true  },
-    { name: 'DAX',    value: '18,492',change: '-0.12%', up: false },
-    { name: 'WTI',    value: '$82.4', change: '-0.8%',  up: false },
-    { name: 'BTC',    value: '$67,240',change:'+2.4%',  up: true  },
-  ],
-  stripPreview: [
-    { name: 'KOSPI',  value: '2,720',  change: '+0.81%', up: true },
-    { name: 'Nikkei', value: '40,168', change: '+0.55%', up: true },
-    { name: 'DAX',    value: '18,492', change: '-0.12%', up: false },
-  ],
-  signals: [
-    { ticker: 'SPY',  name: 'SPDR S&P 500 ETF',    change: '+0.8%',  score: '+1.9', action: '매수', up: true  },
-    { ticker: 'QQQ',  name: 'Invesco QQQ Trust',    change: '+1.2%',  score: '+2.8', action: '매수', up: true  },
-    { ticker: 'SOXS', name: 'Direxion Semi Bear 3X', change: '-2.1%', score: '-2.5', action: '관망', up: false },
-    { ticker: 'ARKK', name: 'ARK Innovation ETF',   change: '+1.7%',  score: '+1.4', action: '매수', up: true  },
-  ],
-  indicators: [
-    { label: 'RSI (14)',   value: '58.2',  sub: '중립 구간',   badge: '중립', cls: 'badge-hold' },
-    { label: 'MACD',      value: '+28',   sub: '골든크로스',  badge: '매수', cls: 'badge-up'   },
-    { label: '이동평균',  value: '5,210', sub: '50MA 상회',   badge: '상승', cls: 'badge-up'   },
-    { label: '볼린저밴드',value: '상단',  sub: '밴드 확장',   badge: '강세', cls: 'badge-up'   },
-    { label: '스토캐스틱',value: '72.1',  sub: '고평가 구간', badge: '주의', cls: 'badge-hold' },
-    { label: '거래량',    value: '↑15%',  sub: '평균 대비',   badge: '보통', cls: 'badge-hold' },
-  ],
-  portfolio: [
-    { code: 'NVDA', name: 'NVIDIA Corp.',    pct: 35, color: 'bg-purple-500', profit: '+11.7%' },
-    { code: 'AAPL', name: 'Apple Inc.',      pct: 25, color: 'bg-blue-500',   profit: '+4.2%'  },
-    { code: 'MSFT', name: 'Microsoft Corp.', pct: 25, color: 'bg-indigo-500', profit: '+2.9%'  },
-    { code: 'META', name: 'Meta Platforms',  pct: 15, color: 'bg-cyan-500',   profit: '+8.1%'  },
-  ],
-  accentColor: 'bg-violet-50 text-violet-600',
-  accentBg: 'bg-violet-600 hover:bg-violet-700',
-  gradientFrom: 'from-violet-600',
-  gradientTo: 'to-indigo-700',
+// ── 기술적 지표 → UI 매핑 ───────────────────────────────────────────────
+function buildIndicators(row: Record<string, any>): IndicatorItem[] {
+  const close = Number(row.close)
+  const rsi = Number(row.rsi)
+  const macd = Number(row.macd)
+  const signal = Number(row.signal_line)
+  const sma50 = Number(row.sma_50)
+  const sma200 = Number(row.sma_200)
+  const bbUp = Number(row.bollinger_upper)
+  const bbLow = Number(row.bollinger_lower)
+  const stochK = Number(row.stoch_k)
+
+  const rsiBadge = rsi >= 70 ? { badge: '과매수', cls: 'badge-sell', sub: '과매수 구간' }
+    : rsi <= 30 ? { badge: '과매도', cls: 'badge-buy', sub: '과매도 구간' }
+    : { badge: '중립', cls: 'badge-hold', sub: '중립 구간' }
+
+  return [
+    { label: 'RSI (14)',   value: fmt1(rsi),       sub: rsiBadge.sub, badge: rsiBadge.badge, cls: rsiBadge.cls },
+    { label: 'MACD',       value: macd >= 0 ? `+${fmt2(macd)}` : fmt2(macd),
+      sub: macd > signal ? 'Signal 상회' : 'Signal 하회',
+      badge: macd > signal ? '매수' : '매도', cls: macd > signal ? 'badge-up' : 'badge-sell' },
+    { label: '이동평균',   value: fmt0(sma50),
+      sub: close > sma50 ? '50MA 상회' : '50MA 하회',
+      badge: close > sma50 ? '상승' : '하락', cls: close > sma50 ? 'badge-up' : 'badge-sell' },
+    { label: 'SMA 200',    value: fmt0(sma200),
+      sub: close > sma200 ? '장기 상승추세' : '장기 하락추세',
+      badge: close > sma200 ? '강세' : '약세', cls: close > sma200 ? 'badge-up' : 'badge-sell' },
+    { label: '볼린저밴드', value: close > bbUp ? '상단' : close < bbLow ? '하단' : '중단',
+      sub: close > bbUp ? '밴드 상단 돌파' : close < bbLow ? '밴드 하단 이탈' : '밴드 내부',
+      badge: close > bbUp ? '과매수' : close < bbLow ? '과매도' : '중립',
+      cls: close > bbUp ? 'badge-sell' : close < bbLow ? 'badge-buy' : 'badge-hold' },
+    { label: '스토캐스틱', value: fmt1(stochK),
+      sub: stochK >= 80 ? '과매수 구간' : stochK <= 20 ? '과매도 구간' : '중립 구간',
+      badge: stochK >= 80 ? '과매수' : stochK <= 20 ? '과매도' : '중립',
+      cls: stochK >= 80 ? 'badge-sell' : stochK <= 20 ? 'badge-buy' : 'badge-hold' },
+  ]
+}
+
+type GlobalSnap = {
+  sp500:   { value: number | null; change: number | null }
+  nasdaq:  { value: number | null; change: number | null }
+  vix:     { value: number | null; change: number | null }
+  wti:     { value: number | null; change: number | null }
+  gold:    { value: number | null; change: number | null }
+  usd_krw: { value: number | null; change: number | null }
+  as_of:   string
 }
 
 export default function DashboardPage() {
   const { market } = useMarket()
   const d = market === 'kr' ? krData : usData
   const isKr = market === 'kr'
+
+  // ── 실시간 데이터 상태 ──────────────────────────────────────────────
+  const [globalSnap, setGlobalSnap] = useState<GlobalSnap | null>(null)
+  const [activeRows, setActiveRows] = useState<Record<string, any>[]>([])
+  const [index2Rows, setIndex2Rows] = useState<Record<string, any>[]>([])
+  const [realSignals, setRealSignals] = useState<typeof d.signals | null>(null)
+
+  useEffect(() => {
+    fetch('/api/global-indicators')
+      .then(r => r.json())
+      .then(({ data }) => { if (data) setGlobalSnap(data) })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const symbol = isKr ? '^KS11' : '^GSPC'
+    setActiveRows([])
+    fetch(`/api/market-summary?symbol=${symbol}`)
+      .then(r => r.json())
+      .then(({ data }) => { if (data?.length) setActiveRows(data) })
+      .catch(() => {})
+  }, [isKr])
+
+  useEffect(() => {
+    const symbol = isKr ? '^KQ11' : '^IXIC'
+    setIndex2Rows([])
+    fetch(`/api/market-summary?symbol=${encodeURIComponent(symbol)}`)
+      .then(r => r.json())
+      .then(({ data }) => { if (data?.length) setIndex2Rows(data) })
+      .catch(() => {})
+  }, [isKr])
+
+  useEffect(() => {
+    fetch('/api/signals')
+      .then(r => r.json())
+      .then(({ data }) => { if (data?.length) setRealSignals(data) })
+      .catch(() => {})
+  }, [])
+
+  // ── 실제 데이터 → UI 포맷 변환 ─────────────────────────────────────
+  const latestRow = activeRows[0]
+  const closeArr = [...activeRows].reverse().map(r => Number(r.close)).filter(Boolean)
+
+  const realGlobalStrip: StripItem[] | null = globalSnap ? [
+    { name: 'S&P 500', value: fmt0(globalSnap.sp500.value),   change: fmtPct(globalSnap.sp500.change),   up: (globalSnap.sp500.change ?? 0) >= 0 },
+    { name: 'NASDAQ',  value: fmt0(globalSnap.nasdaq.value),  change: fmtPct(globalSnap.nasdaq.change),  up: (globalSnap.nasdaq.change ?? 0) >= 0 },
+    { name: 'VIX',     value: fmt2(globalSnap.vix.value),     change: fmtPct(globalSnap.vix.change),     up: (globalSnap.vix.change ?? 0) < 0 },
+    { name: 'WTI',     value: `$${fmt2(globalSnap.wti.value)}`,     change: fmtPct(globalSnap.wti.change),     up: (globalSnap.wti.change ?? 0) >= 0 },
+    { name: 'Gold',    value: `$${fmt0(globalSnap.gold.value)}`,    change: fmtPct(globalSnap.gold.change),    up: (globalSnap.gold.change ?? 0) >= 0 },
+    { name: 'USD/KRW', value: fmt1(globalSnap.usd_krw.value), change: fmtPct(globalSnap.usd_krw.change), up: (globalSnap.usd_krw.change ?? 0) >= 0 },
+  ] : null
+
+  const realStripPreview: StripItem[] | null = globalSnap ? [
+    { name: 'S&P 500', value: fmt0(globalSnap.sp500.value),  change: fmtPct(globalSnap.sp500.change),  up: (globalSnap.sp500.change ?? 0) >= 0 },
+    { name: 'NASDAQ',  value: fmt0(globalSnap.nasdaq.value), change: fmtPct(globalSnap.nasdaq.change), up: (globalSnap.nasdaq.change ?? 0) >= 0 },
+    { name: 'USD/KRW', value: fmt1(globalSnap.usd_krw.value),change: fmtPct(globalSnap.usd_krw.change),up: (globalSnap.usd_krw.change ?? 0) >= 0 },
+  ] : null
+
+  // RSI 등 지표가 실제 계산된 경우만 사용 (null이면 mock 유지)
+  const realIndicators: IndicatorItem[] | null =
+    latestRow?.rsi != null ? buildIndicators(latestRow) : null
+
+  const index2Latest = index2Rows[0]
+  const index2CloseArr = [...index2Rows].reverse().map(r => Number(r.close)).filter(Boolean)
+  const realIndex2 = index2Latest ? {
+    ...d.index2,
+    value: fmt0(index2Latest.close),
+    change: (() => {
+      const prev = index2Rows[1]?.close
+      const curr = index2Latest.close
+      if (!prev || !curr) return d.index2.change
+      const diff = curr - prev
+      const pct = (diff / prev * 100).toFixed(2)
+      return `${diff >= 0 ? '+' : ''}${fmt0(diff)} (${diff >= 0 ? '+' : ''}${pct}%)`
+    })(),
+    data: index2CloseArr.length >= 2 ? index2CloseArr : d.index2.data,
+    ohlc: [
+      ['시가', fmt0(index2Latest.open)],
+      ['고가', fmt0(index2Latest.high)],
+      ['저가', fmt0(index2Latest.low)],
+    ] as [string, string][],
+  } : null
+
+  const realIndex1 = latestRow ? {
+    ...d.index1,
+    value: fmt0(latestRow.close),
+    change: (() => {
+      const prev = activeRows[1]?.close
+      const curr = latestRow.close
+      if (!prev || !curr) return d.index1.change
+      const diff = curr - prev
+      const pct = (diff / prev * 100).toFixed(2)
+      return `${diff >= 0 ? '+' : ''}${fmt0(diff)} (${diff >= 0 ? '+' : ''}${pct}%)`
+    })(),
+    data: closeArr.length >= 2 ? closeArr : d.index1.data,
+    ohlc: [
+      ['시가', fmt0(latestRow.open)],
+      ['고가', fmt0(latestRow.high)],
+      ['저가', fmt0(latestRow.low)],
+    ] as [string, string][],
+  } : d.index1
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
@@ -154,7 +202,7 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-6">
           <div className="hidden sm:flex items-center gap-4">
-            {d.stripPreview.map((idx) => (
+            {(realStripPreview ?? d.stripPreview).map((idx) => (
               <div key={idx.name} className="text-center">
                 <p className="text-[10px] text-slate-400 font-medium">{idx.name}</p>
                 <p className="text-sm font-bold text-slate-900">{idx.value}</p>
@@ -238,7 +286,7 @@ export default function DashboardPage() {
 
           {/* Index Charts */}
           <div className="grid gap-4 md:grid-cols-2">
-            {[d.index1, d.index2].map((idx) => (
+            {[realIndex1, realIndex2 ?? d.index2].map((idx) => (
               <div key={idx.name} className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 transition-all duration-300">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2.5">
@@ -287,7 +335,7 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="p-5 grid grid-cols-2 md:grid-cols-3 gap-3">
-              {d.indicators.map(({ label, value, sub, badge, cls }) => (
+              {(realIndicators ?? d.indicators).map(({ label, value, sub, badge, cls }) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-3 hover:bg-slate-100 transition-colors">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-xs font-medium text-slate-500">{label}</p>
@@ -302,9 +350,18 @@ export default function DashboardPage() {
 
           {/* Global Markets Strip */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-            <h3 className="font-bold text-slate-900 mb-3 text-sm">{isKr ? '글로벌 시장' : '아시아 · 유럽 시장'}</h3>
+            <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-slate-900 text-sm">{isKr ? '글로벌 시장' : '아시아 · 유럽 시장'}</h3>
+            {globalSnap
+              ? <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  LIVE · {new Date(globalSnap.as_of as string).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              : <span className="text-[10px] text-slate-400">목업 데이터</span>
+            }
+          </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-              {d.globalStrip.map(({ name, value, change, up }) => (
+              {(realGlobalStrip ?? d.globalStrip).map(({ name, value, change, up }) => (
                 <div key={name} className={`rounded-xl p-3 text-center ${up ? 'bg-emerald-50' : 'bg-red-50'}`}>
                   <p className="text-[10px] text-slate-500 font-medium">{name}</p>
                   <p className="text-sm font-bold text-slate-900 mt-0.5">{value}</p>
@@ -338,7 +395,7 @@ export default function DashboardPage() {
               </Link>
             </div>
             <div className="p-4 space-y-2">
-              {d.signals.map(({ ticker, name, change, score, action, up }) => (
+              {(realSignals ?? d.signals).map(({ ticker, name, change, score, action, up }) => (
                 <div key={ticker}
                   className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-3 hover:bg-slate-100 transition-colors cursor-pointer">
                   <div className="flex items-center gap-2.5">
@@ -432,9 +489,9 @@ export default function DashboardPage() {
                 ? '오늘의 국내 시장 데이터를 기반으로 맞춤형 AI 투자 분석 리포트를 생성합니다.'
                 : '미국 시장 데이터를 기반으로 내일 국장 예측 리포트를 생성합니다.'}
             </p>
-            <Link href="/history"
+            <Link href="/detail"
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-white/20 hover:bg-white/30 py-2.5 text-sm font-semibold transition-colors">
-              리포트 생성하기 <ArrowRightIcon />
+              리포트 보기 <ArrowRightIcon />
             </Link>
           </div>
         </div>
