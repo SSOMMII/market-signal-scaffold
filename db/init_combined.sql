@@ -190,12 +190,154 @@ CREATE INDEX IF NOT EXISTS idx_global_indicators_ts ON global_indicators(as_of_t
 CREATE INDEX IF NOT EXISTS idx_user_alerts_user ON user_alerts(user_id);
 
 -- ============================================================
--- 4) 기본 마스터 데이터 샘플
+-- 4) 마스터 데이터 (인덱스 + 전종목)
 -- ============================================================
-INSERT INTO market_master (symbol, name, market_type, asset_type, region, currency, sector, tags)
-VALUES
-  ('KOSPI',  'KOSPI Composite Index', 'KR',     'INDEX', 'KR', 'KRW', 'Index', ARRAY['KOSPI','INDEX']),
-  ('KOSDAQ', 'KOSDAQ Composite Index','KR',     'INDEX', 'KR', 'KRW', 'Index', ARRAY['KOSDAQ','INDEX']),
-  ('SPX',    'S&P 500',               'US',     'INDEX', 'US', 'USD', 'Index', ARRAY['S&P500','INDEX']),
-  ('NDX',    'NASDAQ 100',            'US',     'INDEX', 'US', 'USD', 'Index', ARRAY['NASDAQ','INDEX'])
-ON CONFLICT DO NOTHING;
+INSERT INTO market_master (symbol, name, market_type, asset_type, currency) VALUES
+
+-- 인덱스
+('KOSPI',  'KOSPI Composite Index',  'KR', 'INDEX', 'KRW'),
+('KOSDAQ', 'KOSDAQ Composite Index', 'KR', 'INDEX', 'KRW'),
+('^KS11',  'KOSPI Index',            'KR', 'INDEX', 'KRW'),
+('SPX',    'S&P 500',                'US', 'INDEX', 'USD'),
+('NDX',    'NASDAQ 100',             'US', 'INDEX', 'USD'),
+
+-- 국내 대형주 (KOSPI)
+('005930', '삼성전자',            'KR', 'STOCK', 'KRW'),
+('005935', '삼성전자우',          'KR', 'STOCK', 'KRW'),
+('000660', 'SK하이닉스',          'KR', 'STOCK', 'KRW'),
+('035420', 'NAVER',               'KR', 'STOCK', 'KRW'),
+('035720', '카카오',              'KR', 'STOCK', 'KRW'),
+('005380', '현대차',              'KR', 'STOCK', 'KRW'),
+('000270', '기아',                'KR', 'STOCK', 'KRW'),
+('005490', 'POSCO홀딩스',         'KR', 'STOCK', 'KRW'),
+('051910', 'LG화학',              'KR', 'STOCK', 'KRW'),
+('006400', '삼성SDI',             'KR', 'STOCK', 'KRW'),
+('373220', 'LG에너지솔루션',      'KR', 'STOCK', 'KRW'),
+('207940', '삼성바이오로직스',    'KR', 'STOCK', 'KRW'),
+('068270', '셀트리온',            'KR', 'STOCK', 'KRW'),
+('128940', '한미약품',            'KR', 'STOCK', 'KRW'),
+('012330', '현대모비스',          'KR', 'STOCK', 'KRW'),
+('028260', '삼성물산',            'KR', 'STOCK', 'KRW'),
+('018260', '삼성에스디에스',      'KR', 'STOCK', 'KRW'),
+('009150', '삼성전기',            'KR', 'STOCK', 'KRW'),
+('000810', '삼성화재',            'KR', 'STOCK', 'KRW'),
+('032830', '삼성생명',            'KR', 'STOCK', 'KRW'),
+('003550', 'LG',                  'KR', 'STOCK', 'KRW'),
+('066570', 'LG전자',              'KR', 'STOCK', 'KRW'),
+('032640', 'LG유플러스',          'KR', 'STOCK', 'KRW'),
+('034730', 'SK',                  'KR', 'STOCK', 'KRW'),
+('096770', 'SK이노베이션',        'KR', 'STOCK', 'KRW'),
+('017670', 'SK텔레콤',            'KR', 'STOCK', 'KRW'),
+('030200', 'KT',                  'KR', 'STOCK', 'KRW'),
+('055550', '신한지주',            'KR', 'STOCK', 'KRW'),
+('105560', 'KB금융',              'KR', 'STOCK', 'KRW'),
+('086790', '하나금융지주',        'KR', 'STOCK', 'KRW'),
+('316140', '우리금융지주',        'KR', 'STOCK', 'KRW'),
+('024110', '기업은행',            'KR', 'STOCK', 'KRW'),
+('015760', '한국전력',            'KR', 'STOCK', 'KRW'),
+('010950', 'S-Oil',               'KR', 'STOCK', 'KRW'),
+('033780', 'KT&G',                'KR', 'STOCK', 'KRW'),
+('004020', '현대제철',            'KR', 'STOCK', 'KRW'),
+('011200', 'HMM',                 'KR', 'STOCK', 'KRW'),
+('009540', 'HD한국조선해양',      'KR', 'STOCK', 'KRW'),
+('329180', 'HD현대중공업',        'KR', 'STOCK', 'KRW'),
+('267250', 'HD현대',              'KR', 'STOCK', 'KRW'),
+('042660', '한화오션',            'KR', 'STOCK', 'KRW'),
+('010140', '삼성중공업',          'KR', 'STOCK', 'KRW'),
+('003490', '대한항공',            'KR', 'STOCK', 'KRW'),
+('020560', '아시아나항공',        'KR', 'STOCK', 'KRW'),
+('047050', '포스코인터내셔널',    'KR', 'STOCK', 'KRW'),
+('161390', '한국타이어앤테크놀로지', 'KR', 'STOCK', 'KRW'),
+('000120', 'CJ대한통운',          'KR', 'STOCK', 'KRW'),
+('097950', 'CJ제일제당',          'KR', 'STOCK', 'KRW'),
+('271560', '오리온',              'KR', 'STOCK', 'KRW'),
+('000080', '하이트진로',          'KR', 'STOCK', 'KRW'),
+('021240', '코웨이',              'KR', 'STOCK', 'KRW'),
+('010060', 'OCI홀딩스',           'KR', 'STOCK', 'KRW'),
+
+-- 국내 IT/플랫폼/엔터
+('377300', '카카오페이',          'KR', 'STOCK', 'KRW'),
+('323410', '카카오뱅크',          'KR', 'STOCK', 'KRW'),
+('352820', '하이브',              'KR', 'STOCK', 'KRW'),
+('041510', '에스엠',              'KR', 'STOCK', 'KRW'),
+('035900', 'JYP엔터테인먼트',     'KR', 'STOCK', 'KRW'),
+('122870', '와이지엔터테인먼트',  'KR', 'STOCK', 'KRW'),
+('036570', '엔씨소프트',          'KR', 'STOCK', 'KRW'),
+('251270', '넷마블',              'KR', 'STOCK', 'KRW'),
+('263750', '펄어비스',            'KR', 'STOCK', 'KRW'),
+('112040', '위메이드',            'KR', 'STOCK', 'KRW'),
+
+-- 국내 2차전지/신에너지
+('247540', '에코프로비엠',        'KR', 'STOCK', 'KRW'),
+('086520', '에코프로',            'KR', 'STOCK', 'KRW'),
+('402340', '씨에스윈드',          'KR', 'STOCK', 'KRW'),
+('011790', 'SKC',                 'KR', 'STOCK', 'KRW'),
+('006260', 'LS',                  'KR', 'STOCK', 'KRW'),
+
+-- 미국 빅테크
+('AAPL',  'Apple Inc.',                 'US', 'STOCK', 'USD'),
+('MSFT',  'Microsoft Corporation',      'US', 'STOCK', 'USD'),
+('NVDA',  'NVIDIA Corporation',         'US', 'STOCK', 'USD'),
+('GOOGL', 'Alphabet Inc. (Class A)',    'US', 'STOCK', 'USD'),
+('GOOG',  'Alphabet Inc. (Class C)',    'US', 'STOCK', 'USD'),
+('AMZN',  'Amazon.com Inc.',            'US', 'STOCK', 'USD'),
+('META',  'Meta Platforms Inc.',        'US', 'STOCK', 'USD'),
+('TSLA',  'Tesla Inc.',                 'US', 'STOCK', 'USD'),
+('AVGO',  'Broadcom Inc.',              'US', 'STOCK', 'USD'),
+('AMD',   'Advanced Micro Devices',     'US', 'STOCK', 'USD'),
+('INTC',  'Intel Corporation',          'US', 'STOCK', 'USD'),
+('QCOM',  'Qualcomm Inc.',              'US', 'STOCK', 'USD'),
+('ORCL',  'Oracle Corporation',         'US', 'STOCK', 'USD'),
+('CRM',   'Salesforce Inc.',            'US', 'STOCK', 'USD'),
+('ADBE',  'Adobe Inc.',                 'US', 'STOCK', 'USD'),
+('NOW',   'ServiceNow Inc.',            'US', 'STOCK', 'USD'),
+('PLTR',  'Palantir Technologies',      'US', 'STOCK', 'USD'),
+
+-- 미국 금융
+('JPM',   'JPMorgan Chase & Co.',       'US', 'STOCK', 'USD'),
+('BAC',   'Bank of America',            'US', 'STOCK', 'USD'),
+('WFC',   'Wells Fargo & Co.',          'US', 'STOCK', 'USD'),
+('GS',    'Goldman Sachs Group',        'US', 'STOCK', 'USD'),
+('MS',    'Morgan Stanley',             'US', 'STOCK', 'USD'),
+('V',     'Visa Inc.',                  'US', 'STOCK', 'USD'),
+('MA',    'Mastercard Inc.',            'US', 'STOCK', 'USD'),
+('PYPL',  'PayPal Holdings',            'US', 'STOCK', 'USD'),
+
+-- 미국 헬스케어/소비재/에너지
+('UNH',   'UnitedHealth Group',         'US', 'STOCK', 'USD'),
+('JNJ',   'Johnson & Johnson',          'US', 'STOCK', 'USD'),
+('LLY',   'Eli Lilly and Company',      'US', 'STOCK', 'USD'),
+('PFE',   'Pfizer Inc.',                'US', 'STOCK', 'USD'),
+('WMT',   'Walmart Inc.',               'US', 'STOCK', 'USD'),
+('COST',  'Costco Wholesale',           'US', 'STOCK', 'USD'),
+('HD',    'Home Depot Inc.',            'US', 'STOCK', 'USD'),
+('PG',    'Procter & Gamble Co.',       'US', 'STOCK', 'USD'),
+('KO',    'Coca-Cola Company',          'US', 'STOCK', 'USD'),
+('PEP',   'PepsiCo Inc.',               'US', 'STOCK', 'USD'),
+('XOM',   'Exxon Mobil Corporation',    'US', 'STOCK', 'USD'),
+('CVX',   'Chevron Corporation',        'US', 'STOCK', 'USD'),
+
+-- 미국 미디어/기타
+('NFLX',  'Netflix Inc.',               'US', 'STOCK', 'USD'),
+('DIS',   'Walt Disney Co.',            'US', 'STOCK', 'USD'),
+('UBER',  'Uber Technologies',          'US', 'STOCK', 'USD'),
+('ABNB',  'Airbnb Inc.',                'US', 'STOCK', 'USD'),
+('SPOT',  'Spotify Technology',         'US', 'STOCK', 'USD'),
+('TSM',   'Taiwan Semiconductor',       'US', 'STOCK', 'USD'),
+('ASML',  'ASML Holding N.V.',          'US', 'STOCK', 'USD'),
+('BABA',  'Alibaba Group',              'US', 'STOCK', 'USD'),
+
+-- 미국 ETF
+('SPY',   'SPDR S&P 500 ETF',          'US', 'ETF', 'USD'),
+('QQQ',   'Invesco QQQ Trust',          'US', 'ETF', 'USD'),
+('IWM',   'iShares Russell 2000 ETF',  'US', 'ETF', 'USD'),
+('VTI',   'Vanguard Total Stock Market','US', 'ETF', 'USD'),
+('VOO',   'Vanguard S&P 500 ETF',      'US', 'ETF', 'USD'),
+('GLD',   'SPDR Gold Shares',          'US', 'ETF', 'USD'),
+('TLT',   'iShares 20+ Year Treasury', 'US', 'ETF', 'USD'),
+('ARKK',  'ARK Innovation ETF',        'US', 'ETF', 'USD'),
+('SOXL',  'Direxion Semicon Bull 3X',  'US', 'ETF', 'USD')
+
+ON CONFLICT (symbol) DO UPDATE SET
+  name       = EXCLUDED.name,
+  updated_at = now();

@@ -155,8 +155,9 @@ function AnalysisView({
             <div>
               <div className={`text-4xl font-black ${sigColor}`}>{analysis.signal}</div>
               <div className={`inline-flex items-center gap-1.5 mt-2 rounded-full px-3 py-1 text-xs font-semibold border ${sigBg} ${sigColor}`}>
-                동종업계 대비{' '}
-                {analysis.aiScore >= 1.5 ? '상위 20%' : analysis.aiScore <= -1.0 ? '하위 30%' : '중간 수준'}
+                기술지표 종합{' '}
+                {analysis.aiScore >= 1.5 ? '강세' : analysis.aiScore <= -1.5 ? '약세' : '중립'}
+                {' '}(Score {analysis.aiScore > 0 ? '+' : ''}{analysis.aiScore})
               </div>
             </div>
             <ScoreArc score={analysis.aiScore} />
@@ -185,7 +186,7 @@ function AnalysisView({
           return (
             <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Fear &amp; Greed Index</p>
+                <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Fear &amp; Greed Index <span className="text-slate-700 normal-case font-normal">(시장 전체)</span></p>
                 <span className={`text-xs font-bold ${lc}`}>{label}</span>
               </div>
               <div className="flex items-end gap-3 mb-2">
