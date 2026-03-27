@@ -71,6 +71,9 @@ node_modules/
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# ML 모델 파일 (용량 크고 GitHub Actions cache로 관리)
+scripts/models/
+
 # OS generated files
 .DS_Store
 .DS_Store?

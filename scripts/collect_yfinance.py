@@ -158,8 +158,10 @@ def collect_by_date(start_date: str, end_date: str) -> list[dict]:
 
             hist = _compute_indicators(hist)
 
-            # 요청된 날짜 범위만 반환
-            hist_sliced = hist[hist.index >= pd.Timestamp(start_date)]
+            # 요청된 날짜 범위만 반환 (타임존 무관하게 date 레벨 비교)
+            from datetime import date as _date
+            start_d = _date.fromisoformat(start_date)
+            hist_sliced = hist[[d.date() >= start_d for d in hist.index]]
             for ts, row in hist_sliced.iterrows():
                 results.append(_row_to_record(symbol, ts, row))
 

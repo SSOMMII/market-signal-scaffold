@@ -1,0 +1,65 @@
+name: LightGBM Daily Predict
+
+on:
+  # 평일 22:00 UTC (한국 다음날 오전 7시) — 미국 장 마감(21:00 UTC) 후 1시간 뒤
+  schedule:
+    - cron: "0 22 * * 1-5"
+
+  # 수동 실행 (GitHub Actions 탭에서 Run workflow 버튼)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "실행 모드"
+        required: true
+        default: "predict-only"
+        type: choice
+        options:
+          - predict-only   # 저장된 모델로 예측만 (매일)
+          - train          # 전체 재학습 + 예측 (주 1회 권장)
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            yfinance pandas ta \
+            lightgbm scikit-learn joblib \
+            supabase
+
+      # 학습된 모델을 GitHub Actions cache에 저장/복원
+      - name: Restore model cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: scripts/models/lgbm_model.pkl
+          key: lgbm-model-${{ hashFiles('scripts/train_lgbm.py') }}
+          restore-keys: lgbm-model-
+
+      # 모델이 없거나 수동으로 train 선택 시 전체 학습
+      - name: Train (모델 없음 또는 수동 train 선택)
+        if: steps.model-cache.outputs.cache-hit != 'true' || github.event.inputs.mode == 'train'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/train_lgbm.py
+
+      # 모델 있으면 예측만
+      - name: Predict only (매일 기본)
+        if: steps.model-cache.outputs.cache-hit == 'true' && github.event.inputs.mode != 'train'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/train_lgbm.py --predict-only

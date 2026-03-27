@@ -8,7 +8,8 @@ type MarketItem = {
   id: number
   symbol: string
   name: string | null
-  market: string | null
+  market_type: string | null
+  asset_type: string | null
 }
 
 type Analysis = {
@@ -22,46 +23,6 @@ type Analysis = {
   redditMentions: number
   weeklyIssues: string[]
   technicals: { label: string; value: string; badge: string; up: boolean | null }[]
-}
-
-// ── Mock analysis generator ──────────────────────────────────────────────────
-// Deterministic pseudo-random from symbol string so values are stable per symbol
-function hashOf(s: string) {
-  return s.split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, 0)
-}
-
-function buildAnalysis(item: MarketItem): Analysis {
-  const h = hashOf(item.symbol)
-  const score = Math.round(((h % 90) - 45) / 10 * 10) / 10  // -4.5 ~ +4.5
-  const signal: '매수' | '매도' | '관망' =
-    score >= 1.5 ? '매수' : score <= -1.0 ? '매도' : '관망'
-  const rsi = 25 + (h % 55)
-  const fg  = 20 + (h % 65)
-
-  return {
-    symbol: item.symbol,
-    name: item.name || item.symbol,
-    market: item.market || 'US',
-    aiScore: score,
-    signal,
-    reliability: 55 + (h % 40),
-    fearGreed: fg,
-    redditMentions: 40 + (h % 900),
-    weeklyIssues: [
-      `${item.name || item.symbol} 관련 긍정 분석 증가`,
-      `기관 수급 변화 포착`,
-      `실적 발표 일정 주목`,
-    ],
-    technicals: [
-      { label: 'RSI (14)', value: String(rsi),
-        badge: rsi >= 70 ? '과매수' : rsi <= 30 ? '과매도' : '중립',
-        up: rsi <= 30 ? true : rsi >= 70 ? false : null },
-      { label: 'MACD', value: score >= 0 ? `+${(score * 0.3).toFixed(2)}` : `${(score * 0.3).toFixed(2)}`,
-        badge: score >= 0 ? '매수' : '매도', up: score >= 0 },
-      { label: 'SMA 50', value: score >= 0 ? '상회' : '하회',
-        badge: score >= 0 ? '상승' : '하락', up: score >= 0 },
-    ],
-  }
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -78,19 +39,16 @@ function BotIcon({ size = 20 }: { size?: number }) {
 }
 
 function ScoreArc({ score }: { score: number }) {
-  // Normalize -4.5~+4.5 → 0~1, map to semicircle arc
   const norm  = Math.max(0, Math.min(1, (score + 4.5) / 9))
-  const total = Math.PI * 35 // ≈ 109.96
+  const total = Math.PI * 35
   const filled = norm * total
   const color = score >= 1.5 ? '#10b981' : score <= -1.0 ? '#ef4444' : '#f59e0b'
 
   return (
     <div className="relative flex items-end justify-center" style={{ width: 88, height: 52 }}>
       <svg width="88" height="52" viewBox="0 0 88 52" className="absolute bottom-0">
-        {/* track */}
         <path d="M 9,48 A 35,35 0 0,1 79,48"
           fill="none" stroke="#1e293b" strokeWidth="8" strokeLinecap="round"/>
-        {/* fill */}
         <path d="M 9,48 A 35,35 0 0,1 79,48"
           fill="none" stroke={color} strokeWidth="8" strokeLinecap="round"
           strokeDasharray={`${filled} ${total}`}
@@ -116,8 +74,7 @@ function SearchIcon() {
   )
 }
 
-
-// ── Symbol row (used in both search + watchlist) ─────────────────────────────
+// ── Symbol row ───────────────────────────────────────────────────────────────
 function SymbolRow({
   item, inWatchlist, onSelect, onToggleStar,
 }: {
@@ -126,12 +83,12 @@ function SymbolRow({
   onSelect: () => void
   onToggleStar: (e: React.MouseEvent) => void
 }) {
-  const isKr = item.market === 'KR'
+  const isKr = item.market_type === 'KR'
   const initials = (item.symbol || '?').replace(/[^A-Z0-9]/gi, '').slice(0, 2).toUpperCase()
   return (
-    <button
+    <div
+      className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 hover:bg-slate-900 transition-colors cursor-pointer"
       onClick={onSelect}
-      className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 hover:bg-slate-900 transition-colors text-left"
     >
       <div className="flex items-center gap-3">
         <div className={`h-9 w-9 rounded-xl flex items-center justify-center text-xs font-bold shrink-0
@@ -148,7 +105,7 @@ function SymbolRow({
       <div className="flex items-center gap-2 shrink-0 ml-2">
         <span className={`text-[10px] rounded px-1.5 py-0.5 font-semibold
           ${isKr ? 'bg-indigo-500/10 text-indigo-400' : 'bg-violet-500/10 text-violet-400'}`}>
-          {item.market || 'US'}
+          {item.market_type || 'US'}
         </span>
         <button
           onClick={onToggleStar}
@@ -158,7 +115,7 @@ function SymbolRow({
           ★
         </button>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -223,7 +180,7 @@ function AnalysisView({
         {/* AI Signal + Score Arc */}
         <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">
           <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-3">
-            AI 분석 시그널
+            AI 분석 시그널 <span className="text-slate-700 normal-case font-normal">(기술 지표 기반)</span>
           </p>
           <div className="flex items-center justify-between">
             <div>
@@ -253,21 +210,20 @@ function AnalysisView({
             />
           </div>
           <p className="text-[10px] text-slate-600 mt-1.5">
-            기술지표 · 감성분석 · Reddit 데이터 종합
+            RSI · MACD · SMA50 실데이터 기반
           </p>
         </div>
 
         {/* Fear & Greed + Reddit */}
         <div className="space-y-3">
 
-          {/* Fear & Greed — 0~100 스펙트럼 게이지 */}
+          {/* Fear & Greed */}
           {(() => {
             const fg = analysis.fearGreed
             const label =
               fg <= 25 ? '극단적 공포' : fg <= 45 ? '공포' : fg <= 55 ? '중립' : fg <= 75 ? '탐욕' : '극단적 탐욕'
             const labelColor =
               fg <= 25 ? 'text-red-500' : fg <= 45 ? 'text-orange-400' : fg <= 55 ? 'text-amber-400' : fg <= 75 ? 'text-emerald-400' : 'text-emerald-500'
-            // 게이지 색: 빨강→주황→노랑→연두→초록
             const gradientStyle = {
               background: 'linear-gradient(to right, #ef4444, #f97316, #eab308, #84cc16, #22c55e)',
             }
@@ -281,9 +237,7 @@ function AnalysisView({
                   <span className="text-3xl font-black text-white leading-none">{fg}</span>
                   <span className="text-xs text-slate-500 mb-1">/ 100</span>
                 </div>
-                {/* 스펙트럼 게이지 */}
                 <div className="relative h-2 rounded-full overflow-hidden mb-1" style={gradientStyle}>
-                  {/* 포인터 */}
                   <div
                     className="absolute top-1/2 -translate-y-1/2 h-3.5 w-1.5 rounded-full bg-white shadow-md border border-slate-300"
                     style={{ left: `calc(${fg}% - 3px)` }}
@@ -296,13 +250,15 @@ function AnalysisView({
             )
           })()}
 
-          {/* Reddit 언급 — 상대적 레벨 바 */}
+          {/* Reddit 언급량 */}
           {(() => {
             const n = analysis.redditMentions
-            // 500 이상이면 매우 높음 기준
-            const level = n >= 500 ? 4 : n >= 200 ? 3 : n >= 80 ? 2 : 1
-            const levelLabel = ['', '낮음', '보통', '높음', '매우 높음'][level]
-            const levelColor = ['', 'text-slate-400', 'text-amber-400', 'text-emerald-400', 'text-emerald-400'][level]
+            const isKrStock = analysis.market === 'KR'
+            if (isKrStock) return null  // KR 종목은 Reddit 데이터 없음
+
+            const level = n >= 500 ? 4 : n >= 200 ? 3 : n >= 80 ? 2 : n > 0 ? 1 : 0
+            const levelLabel = ['데이터 없음', '낮음', '보통', '높음', '매우 높음'][level]
+            const levelColor = ['text-slate-600', 'text-slate-400', 'text-amber-400', 'text-emerald-400', 'text-emerald-400'][level]
             return (
               <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">
                 <div className="flex items-center justify-between mb-3">
@@ -310,10 +266,11 @@ function AnalysisView({
                   <span className={`text-xs font-bold ${levelColor}`}>{levelLabel}</span>
                 </div>
                 <div className="flex items-end gap-3 mb-2">
-                  <span className="text-3xl font-black text-white leading-none">{n.toLocaleString()}</span>
-                  <span className="text-xs text-slate-500 mb-1">건 · 7일</span>
+                  <span className="text-3xl font-black text-white leading-none">
+                    {n > 0 ? n.toLocaleString() : '-'}
+                  </span>
+                  {n > 0 && <span className="text-xs text-slate-500 mb-1">건 · 24h</span>}
                 </div>
-                {/* 레벨 바 (4단계) */}
                 <div className="flex gap-1 mt-1">
                   {[1, 2, 3, 4].map(i => (
                     <div
@@ -354,10 +311,10 @@ function AnalysisView({
           </div>
         </div>
 
-        {/* Reddit Issues */}
+        {/* 주요 이슈 (지표 기반) */}
         <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">
           <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-3">
-            Reddit 주요 이슈 (7일)
+            지표 기반 주요 시그널
           </p>
           <div className="space-y-2.5">
             {analysis.weeklyIssues.map((issue, i) => (
@@ -376,6 +333,32 @@ function AnalysisView({
   )
 }
 
+// ── Loading skeleton ──────────────────────────────────────────────────────────
+function AnalysisSkeleton({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="px-5 py-3 border-b border-slate-800 shrink-0">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-white transition-colors mb-3"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>
+          </svg>
+          뒤로
+        </button>
+        <div className="h-4 w-32 bg-slate-800 rounded animate-pulse" />
+        <div className="h-5 w-24 bg-slate-800 rounded animate-pulse mt-2" />
+      </div>
+      <div className="flex-1 p-4 space-y-3">
+        {[120, 80, 96, 80, 80].map((h, i) => (
+          <div key={i} className={`bg-slate-900 rounded-2xl border border-slate-800 animate-pulse`} style={{ height: h }} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Main Panel ───────────────────────────────────────────────────────────────
 export default function AiBotPanel() {
   const [open, setOpen]               = useState(false)
@@ -384,10 +367,12 @@ export default function AiBotPanel() {
   const [masters, setMasters]         = useState<MarketItem[]>([])
   const [watchlist, setWatchlist]     = useState<string[]>([])
   const [selected, setSelected]       = useState<string | null>(null)
+  const [analysis, setAnalysis]       = useState<Analysis | null>(null)
+  const [loadingAnalysis, setLoading] = useState(false)
   const { user, signOut } = useAuth()
   const router = useRouter()
 
-  // Fetch market masters once panel is opened
+  // 패널 열릴 때 마켓 마스터 목록 로드
   useEffect(() => {
     if (open && masters.length === 0) {
       fetch('/api/market-masters')
@@ -397,13 +382,28 @@ export default function AiBotPanel() {
     }
   }, [open, masters.length])
 
-  // Persist watchlist in localStorage
+  // 즐겨찾기 localStorage 복원
   useEffect(() => {
     const saved = localStorage.getItem('gmb_watchlist')
     if (saved) {
       try { setWatchlist(JSON.parse(saved)) } catch { /* ignore */ }
     }
   }, [])
+
+  // 종목 선택 시 실데이터 분석 fetch
+  useEffect(() => {
+    if (!selected) { setAnalysis(null); return }
+    setLoading(true)
+    setAnalysis(null)
+    fetch(`/api/analysis/${selected}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error)
+        setAnalysis(data)
+      })
+      .catch(() => setAnalysis(null))
+      .finally(() => setLoading(false))
+  }, [selected])
 
   function saveWatchlist(list: string[]) {
     setWatchlist(list)
@@ -418,17 +418,19 @@ export default function AiBotPanel() {
     )
   }
 
-  // Filter search results
+  // INDEX, FX, FUTURE 제외 — 기술 지표 데이터가 없는 종목 유형
+  const tradeable = masters.filter(m =>
+    m.asset_type !== 'INDEX' && m.asset_type !== 'FX' && m.asset_type !== 'FUTURE'
+  )
+
   const filtered = query.trim().length >= 1
-    ? masters.filter(m =>
+    ? tradeable.filter(m =>
         m.symbol.toLowerCase().includes(query.toLowerCase()) ||
         (m.name ?? '').toLowerCase().includes(query.toLowerCase())
       ).slice(0, 12)
-    : masters.slice(0, 10)
+    : tradeable.slice(0, 10)
 
-  const selectedItem  = masters.find(m => m.symbol === selected) ?? null
-  const analysis      = selectedItem ? buildAnalysis(selectedItem) : null
-  const watchlistItems = masters.filter(m => watchlist.includes(m.symbol))
+  const watchlistItems = tradeable.filter(m => watchlist.includes(m.symbol))
 
   function handleClose() {
     setOpen(false)
@@ -445,7 +447,6 @@ export default function AiBotPanel() {
           aria-label="AI 어시스턴트 열기"
         >
           <BotIcon size={22} />
-          {/* Online indicator */}
           <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-emerald-400 border-2 border-white animate-pulse" />
         </button>
       )}
@@ -512,15 +513,32 @@ export default function AiBotPanel() {
           </div>
         </div>
 
-        {/* ── Analysis view ── */}
-        {selected && analysis ? (
-          <AnalysisView
-            analysis={analysis}
-            inWatchlist={watchlist.includes(analysis.symbol)}
-            onToggleStar={() => toggleWatchlist(analysis.symbol)}
-            onBack={() => setSelected(null)}
-          />
-        ) : (
+        {/* ── Analysis view (loading or loaded) ── */}
+        {selected && (
+          loadingAnalysis
+            ? <AnalysisSkeleton onBack={() => setSelected(null)} />
+            : analysis
+              ? <AnalysisView
+                  analysis={analysis}
+                  inWatchlist={watchlist.includes(analysis.symbol)}
+                  onToggleStar={() => toggleWatchlist(analysis.symbol)}
+                  onBack={() => setSelected(null)}
+                />
+              : (
+                <div className="flex flex-col flex-1 items-center justify-center gap-3 p-8 text-center">
+                  <p className="text-sm text-slate-400">분석 데이터를 불러올 수 없습니다</p>
+                  <button
+                    onClick={() => setSelected(null)}
+                    className="text-xs text-indigo-400 hover:underline"
+                  >
+                    목록으로 돌아가기
+                  </button>
+                </div>
+              )
+        )}
+
+        {/* ── Search / Watchlist ── */}
+        {!selected && (
           <>
             {/* Tab bar */}
             <div className="flex border-b border-slate-800 shrink-0">
@@ -543,7 +561,6 @@ export default function AiBotPanel() {
             {/* ── Search tab ── */}
             {tab === 'search' && (
               <div className="flex flex-col flex-1 overflow-hidden">
-                {/* Search input */}
                 <div className="px-4 py-3 border-b border-slate-800 shrink-0">
                   <div className="flex items-center gap-2 bg-slate-900 rounded-xl px-3 py-2.5 border border-slate-800 focus-within:border-indigo-500/60 transition-colors">
                     <SearchIcon />
@@ -565,7 +582,6 @@ export default function AiBotPanel() {
                   </div>
                 </div>
 
-                {/* Results */}
                 <div className="flex-1 overflow-y-auto">
                   {masters.length === 0 ? (
                     <div className="flex items-center justify-center h-32">
