@@ -14,7 +14,7 @@ CREATE EXTENSION IF NOT EXISTS citext;
 -- market_master: 종목/ETF/인덱스 마스터
 CREATE TABLE IF NOT EXISTS market_master (
   id serial PRIMARY KEY,
-  symbol text NOT NULL,
+  symbol text NOT NULL UNIQUE,
   name text NOT NULL,
   market_type text NOT NULL CHECK (market_type IN ('KR', 'US', 'GLOBAL')),
   asset_type text NOT NULL CHECK (asset_type IN ('STOCK', 'ETF', 'FUTURE', 'INDEX', 'FX')),
