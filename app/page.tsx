@@ -106,11 +106,11 @@ export default function DashboardPage() {
   }, [isKr])
 
   useEffect(() => {
-    fetch('/api/signals')
+    fetch(`/api/signals?market=${isKr ? 'kr' : 'us'}`)
       .then(r => r.json())
       .then(({ data }) => { if (data?.length) setRealSignals(data) })
       .catch(() => {})
-  }, [])
+  }, [isKr])
 
   // ── 실제 데이터 → UI 포맷 변환 ─────────────────────────────────────
   const latestRow = activeRows[0]

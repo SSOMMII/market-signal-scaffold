@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
-import LoginModal from './LoginModal'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/context/AuthContext'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type MarketItem = {
@@ -115,14 +116,6 @@ function SearchIcon() {
   )
 }
 
-function InfoIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>
-    </svg>
-  )
-}
 
 // ── Symbol row (used in both search + watchlist) ─────────────────────────────
 function SymbolRow({
@@ -171,14 +164,12 @@ function SymbolRow({
 
 // ── Analysis View ────────────────────────────────────────────────────────────
 function AnalysisView({
-  analysis, inWatchlist, onToggleStar, onBack, isLoggedIn, onLoginClick,
+  analysis, inWatchlist, onToggleStar, onBack,
 }: {
   analysis: Analysis
   inWatchlist: boolean
   onToggleStar: () => void
   onBack: () => void
-  isLoggedIn: boolean
-  onLoginClick: () => void
 }) {
   const isKr = analysis.market === 'KR'
   const sigColor =
@@ -380,18 +371,6 @@ function AnalysisView({
           </div>
         </div>
 
-        {/* Login CTA */}
-        {!isLoggedIn && (
-          <button
-            onClick={onLoginClick}
-            className="w-full rounded-2xl bg-indigo-500/10 border border-indigo-500/20 p-4 text-center hover:bg-indigo-500/20 transition-colors"
-          >
-            <p className="text-sm font-semibold text-indigo-400">
-              로그인하면 즐겨찾기 기기 간 동기화
-            </p>
-            <p className="text-xs text-slate-500 mt-1">알림 설정 · 분석 히스토리 보관</p>
-          </button>
-        )}
       </div>
     </div>
   )
@@ -405,8 +384,8 @@ export default function AiBotPanel() {
   const [masters, setMasters]         = useState<MarketItem[]>([])
   const [watchlist, setWatchlist]     = useState<string[]>([])
   const [selected, setSelected]       = useState<string | null>(null)
-  const [showLogin, setShowLogin]     = useState(false)
-  const [isLoggedIn, setIsLoggedIn]   = useState(false)
+  const { user, signOut } = useAuth()
+  const router = useRouter()
 
   // Fetch market masters once panel is opened
   useEffect(() => {
@@ -501,19 +480,21 @@ export default function AiBotPanel() {
           </div>
 
           <div className="flex items-center gap-2">
-            {isLoggedIn ? (
+            {user ? (
               <button
-                onClick={() => setIsLoggedIn(false)}
+                onClick={() => signOut()}
                 className="flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700 transition-colors"
               >
                 <div className="h-5 w-5 rounded-full bg-indigo-500 flex items-center justify-center text-[9px] font-bold text-white">
-                  S
+                  {(user.user_metadata?.name?.[0] ?? user.email?.[0] ?? 'U').toUpperCase()}
                 </div>
-                SSOMMII
+                <span className="max-w-[60px] truncate">
+                  {user.user_metadata?.name ?? user.email?.split('@')[0]}
+                </span>
               </button>
             ) : (
               <button
-                onClick={() => setShowLogin(true)}
+                onClick={() => { handleClose(); router.push('/login') }}
                 className="rounded-lg bg-indigo-500/20 px-3 py-1.5 text-xs font-semibold text-indigo-400 hover:bg-indigo-500/30 transition-colors"
               >
                 로그인
@@ -538,8 +519,6 @@ export default function AiBotPanel() {
             inWatchlist={watchlist.includes(analysis.symbol)}
             onToggleStar={() => toggleWatchlist(analysis.symbol)}
             onBack={() => setSelected(null)}
-            isLoggedIn={isLoggedIn}
-            onLoginClick={() => setShowLogin(true)}
           />
         ) : (
           <>
@@ -622,22 +601,6 @@ export default function AiBotPanel() {
             {/* ── Watchlist tab ── */}
             {tab === 'watchlist' && (
               <div className="flex flex-col flex-1 overflow-hidden">
-                {/* Login sync banner */}
-                {!isLoggedIn && (
-                  <div className="mx-4 mt-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 p-3 flex items-start gap-2.5 shrink-0">
-                    <div className="text-indigo-400 mt-0.5 shrink-0"><InfoIcon /></div>
-                    <div>
-                      <p className="text-xs font-semibold text-indigo-300">로그인하면 기기 간 동기화</p>
-                      <button
-                        onClick={() => setShowLogin(true)}
-                        className="text-[10px] text-indigo-400 underline hover:text-indigo-300 transition-colors"
-                      >
-                        지금 로그인하기 →
-                      </button>
-                    </div>
-                  </div>
-                )}
-
                 {watchlist.length === 0 ? (
                   <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-8">
                     <div className="text-4xl">⭐</div>
@@ -683,13 +646,6 @@ export default function AiBotPanel() {
         )}
       </div>
 
-      {/* ── Login modal ── */}
-      {showLogin && (
-        <LoginModal
-          onClose={() => setShowLogin(false)}
-          onLogin={() => { setIsLoggedIn(true); setShowLogin(false) }}
-        />
-      )}
     </>
   )
 }

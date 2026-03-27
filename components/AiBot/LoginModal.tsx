@@ -1,4 +1,5 @@
 'use client'
+import { useRouter } from 'next/navigation'
 
 interface Props {
   onClose: () => void
@@ -6,6 +7,13 @@ interface Props {
 }
 
 export default function LoginModal({ onClose, onLogin }: Props) {
+  const router = useRouter()
+
+  function goSignup() {
+    onClose()
+    router.push('/signup')
+  }
+
   return (
     <div className="fixed inset-0 z-[200] overflow-y-auto">
       {/* Backdrop — absolute (fixed 아님): 외부 fixed 컨테이너가 viewport를 커버하므로 충분 */}
@@ -97,7 +105,7 @@ export default function LoginModal({ onClose, onLogin }: Props) {
         <div className="px-6 pb-5 text-center space-y-2">
           <p className="text-xs text-slate-500">
             계정이 없으신가요?{' '}
-            <button onClick={onLogin} className="text-indigo-600 font-semibold hover:underline">
+            <button onClick={goSignup} className="text-indigo-600 font-semibold hover:underline">
               회원가입
             </button>
           </p>
