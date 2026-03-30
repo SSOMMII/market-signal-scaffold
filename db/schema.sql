@@ -42,27 +42,7 @@ CREATE TABLE IF NOT EXISTS daily_indicators (
   UNIQUE (market_master_id, as_of_date)
 );
 
--- 3) AI signals output
-CREATE TABLE IF NOT EXISTS ai_signals (
-  id serial PRIMARY KEY,
-  market_master_id integer NOT NULL REFERENCES market_master(id) ON DELETE CASCADE,
-  as_of_date date NOT NULL,
-  source text NOT NULL CHECK (source IN ('NIGHT', 'DAY', 'AUTO', 'BACKTEST')),
-  tech_score numeric(5,2) NOT NULL,
-  global_score numeric(5,2) NOT NULL,
-  futures_score numeric(5,2) NOT NULL,
-  fx_score numeric(5,2) NOT NULL,
-  supply_score numeric(5,2) NOT NULL,
-  total_score numeric(6,2) GENERATED ALWAYS AS ((tech_score*0.3 + global_score*0.3 + futures_score*0.2 + fx_score*0.1 + supply_score*0.1)) STORED,
-  signal text NOT NULL CHECK (signal IN ('STRONG BUY','BUY','HOLD','SELL','STRONG SELL')),
-  confidence numeric(5,2) NOT NULL,
-  commentary text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (market_master_id, as_of_date, source)
-);
-
--- 4) User alerts/preferences
+-- 3) User alerts/preferences
 CREATE TABLE IF NOT EXISTS user_alerts (
   id serial PRIMARY KEY,
   user_id uuid NOT NULL,
@@ -164,12 +144,13 @@ CREATE TABLE IF NOT EXISTS ai_predictions (
   contributions   JSONB,                 -- top_contributors 배열
   breakdown       JSONB,                 -- 카테고리별 기여 수치
   summary_text    TEXT,
+  entry_price     NUMERIC(18, 6),        -- Retention context: 신호 발생 시점의 가격
+  entry_date      DATE,                  -- Retention context: 진입 날짜
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(ticker, date)
 );
 
 -- 10) index 최적화
 CREATE INDEX IF NOT EXISTS idx_daily_indicators_market_date ON daily_indicators(market_master_id, as_of_date);
-CREATE INDEX IF NOT EXISTS idx_ai_signals_market_date ON ai_signals(market_master_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_global_indicators_ts ON global_indicators(as_of_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_user_alerts_user ON user_alerts(user_id);

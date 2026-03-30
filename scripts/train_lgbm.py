@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-LightGBM 학습 스크립트
+LightGBM 학습 스크립트 (KR/US 모델 분리)
 - Supabase daily_indicators 기반
 - 피처: 가격 모멘텀 + 기술적 지표 + 크로스-에셋 (VIX, GLD, USDKRW)
 - 레이블: 5거래일 후 수익률 기반 3분류 (매수/관망/매도)
 - 검증: TimeSeriesSplit (5-fold)
-- 결과: scripts/models/lgbm_model.pkl 저장 + ai_predictions 테이블 upsert
+- 결과: scripts/models/us_model.pkl + scripts/models/kr_model.pkl 저장
 
 Usage:
-    python train_lgbm.py               # 전체 학습 + 최신 예측 저장
-    python train_lgbm.py --predict-only  # 저장된 모델로 예측만 (매일 크론용)
+    python train_lgbm.py                        # 전체 학습 + 최신 예측 저장
+    python train_lgbm.py --tune                 # Optuna 튜닝 후 학습 (권장, ~10분)
+    python train_lgbm.py --tune --n-trials 100  # 튜닝 횟수 지정 (기본 50)
+    python train_lgbm.py --predict-only         # 저장된 모델로 예측만 (매일 크론용)
+    python train_lgbm.py --market us            # US 모델만 학습/예측
+    python train_lgbm.py --market kr            # KR 모델만 학습/예측
 """
 
 import argparse
@@ -34,25 +38,115 @@ try:
     import numpy as np
     import lightgbm as lgb
     from sklearn.model_selection import TimeSeriesSplit
-    from sklearn.metrics import accuracy_score, classification_report
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, log_loss
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import StackingClassifier
+    from scipy.optimize import minimize
     from supabase import create_client
 except ImportError as e:
     print(f"ERROR: 필요 패키지 미설치 → {e}", file=sys.stderr)
-    print("설치: pip install lightgbm scikit-learn joblib pandas supabase", file=sys.stderr)
+    print("설치: pip install lightgbm scikit-learn joblib pandas supabase scipy", file=sys.stderr)
     sys.exit(1)
+
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
+
+
+# ── Beta Calibration 구현 ──────────────────────────────────────────────────────
+
+class BetaCalibrator:
+    """Beta Calibration: P_calibrated = 1 / (1 + (s / (1-s))^(-beta))"""
+    def __init__(self):
+        self.beta = None
+    
+    def fit(self, y_true, y_proba):
+        scores = y_proba[:, 1] if y_proba.ndim > 1 else y_proba
+        scores = np.clip(scores, 1e-15, 1 - 1e-15)
+        
+        def objective(beta):
+            log_odds = np.log(scores) - np.log(1 - scores)
+            calibrated = 1.0 / (1.0 + np.exp(-beta[0] * log_odds))
+            return log_loss(y_true, calibrated)
+        
+        result = minimize(objective, [1.0], method='L-BFGS-B', bounds=[(0.1, 10.0)])
+        self.beta = result.x[0]
+        return self
+    
+    def calibrate(self, y_proba):
+        scores = y_proba[:, 1] if y_proba.ndim > 1 else y_proba
+        scores = np.clip(scores, 1e-15, 1 - 1e-15)
+        log_odds = np.log(scores) - np.log(1 - scores)
+        calibrated = 1.0 / (1.0 + np.exp(-self.beta * log_odds))
+        return calibrated
+
+
+class BetaCalibratedModel:
+    """Beta Calibration이 적용된 분류기 래퍼"""
+    def __init__(self, base_model):
+        self.base_model = base_model
+        self.calibrator = None
+    
+    def fit(self, X, y, X_cal=None, y_cal=None):
+        self.base_model.fit(X, y, callbacks=[lgb.log_evaluation(0)])
+        
+        if X_cal is None:
+            split_idx = int(len(X) * 0.7)
+            X_train, X_cal = X[:split_idx], X[split_idx:]
+            y_train, y_cal = y[:split_idx], y[split_idx:]
+            self.base_model.fit(X_train, y_train, callbacks=[lgb.log_evaluation(0)])
+        
+        y_proba_cal = self.base_model.predict_proba(X_cal)
+        self.calibrator = BetaCalibrator()
+        self.calibrator.fit(y_cal, y_proba_cal)
+        return self
+    
+    def predict_proba(self, X):
+        proba = self.base_model.predict_proba(X)
+        if self.calibrator is None:
+            return proba
+        
+        calibrated_scores = self.calibrator.calibrate(proba)
+        result = np.column_stack([1 - calibrated_scores, calibrated_scores])
+        return result
+    
+    def predict(self, X):
+        proba = self.predict_proba(X)
+        return (proba[:, 1] >= 0.5).astype(int)
 
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
-# 학습 대상 ETF (US 시장)
-TARGET_SYMBOLS = ['QQQ', 'SPY', 'SOXL', 'TQQQ', 'IWM', 'GLD', 'TLT']
+# US ETF — 달러 자산, KOSPI 영향 없음
+US_SYMBOLS = [
+    'QQQ', 'SPY', 'SOXL', 'TQQQ', 'IWM', 'GLD', 'TLT',
+]
+
+# KR ETF/주식 — 원화 자산, USDKRW·KOSPI 영향 큼
+KR_SYMBOLS = [
+    '069500.KS',   # KODEX 200
+    '229200.KS',   # KODEX KOSDAQ150
+    '360750.KS',   # TIGER 미국S&P500
+    '305720.KS',   # KODEX 반도체
+    '005930.KS',   # 삼성전자
+    '000660.KS',   # SK하이닉스
+    '035420.KS',   # NAVER
+    '005380.KS',   # 현대차
+]
+
+TARGET_SYMBOLS = US_SYMBOLS + KR_SYMBOLS
 
 # 크로스-에셋 피처로 쓸 종목
 CROSS_ASSET_SYMBOLS = {
     'vix':    '^VIX',       # 공포지수
     'gold':   'GC=F',       # 금 선물
-    'usdkrw': 'USDKRW=X',   # 달러/원
+    'usdkrw': 'USDKRW=X',   # 달러/원 (KR 종목에 직접 영향)
     'tnx':    '^GSPC',      # S&P500 (전체 시장 흐름)
+    'kospi':  '^KS11',      # KOSPI (KR 종목 기준지수)
 }
 
 # 레이블 기준 (5거래일 후 수익률)
@@ -60,16 +154,144 @@ FORWARD_DAYS = 5
 LABEL_THRESHOLDS = {
     'buy':  0.02,   # +2% 이상 → 매수 (1)
     'sell': -0.02,  # -2% 이하 → 매도 (-1)
-    # 그 사이 → 관망 (0)
 }
 
-# 레버리지 ETF는 임계값을 더 넓게
+# 종목별 임계값 (변동성 큰 종목은 더 넓게, KR 표준 종목은 ±1.5%)
 LEVERAGE_THRESHOLDS = {
-    'SOXL': (0.05, -0.05),
-    'TQQQ': (0.04, -0.04),
+    # US 레버리지 ETF
+    'SOXL':      (0.05, -0.05),
+    'TQQQ':      (0.04, -0.04),
+    # KR 변동성 큰 종목
+    '000660.KS': (0.03, -0.03),  # SK하이닉스 (반도체 변동성)
+    '305720.KS': (0.03, -0.03),  # KODEX 반도체
+    '035420.KS': (0.03, -0.03),  # NAVER
+    # KR ETF / 블루칩 → ±1.5% (±2%보다 적절)
+    '069500.KS': (0.015, -0.015),  # KODEX 200
+    '229200.KS': (0.015, -0.015),  # KODEX KOSDAQ150
+    '360750.KS': (0.015, -0.015),  # TIGER 미국S&P500
+    '005930.KS': (0.015, -0.015),  # 삼성전자
+    '005380.KS': (0.015, -0.015),  # 현대차
 }
 
-MODEL_PATH = Path(__file__).parent / "models" / "lgbm_model.pkl"
+# FOMC 결정일 (2021~2026, 공개 일정 기반)
+FOMC_DATES = pd.to_datetime([
+    # 2021
+    "2021-01-27", "2021-03-17", "2021-04-28", "2021-06-16",
+    "2021-07-28", "2021-09-22", "2021-11-03", "2021-12-15",
+    # 2022
+    "2022-01-26", "2022-03-16", "2022-05-04", "2022-06-15",
+    "2022-07-27", "2022-09-21", "2022-11-02", "2022-12-14",
+    # 2023
+    "2023-02-01", "2023-03-22", "2023-05-03", "2023-06-14",
+    "2023-07-26", "2023-09-20", "2023-11-01", "2023-12-13",
+    # 2024
+    "2024-01-31", "2024-03-20", "2024-05-01", "2024-06-12",
+    "2024-07-31", "2024-09-18", "2024-11-07", "2024-12-18",
+    # 2025
+    "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18",
+    "2025-07-30", "2025-09-17", "2025-11-05", "2025-12-17",
+    # 2026
+    "2026-01-28", "2026-03-18", "2026-05-06", "2026-06-17",
+    "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16",
+])
+
+# CPI 발표일 (BLS 기준, 2021~2026)
+CPI_DATES = pd.to_datetime([
+    # 2021
+    "2021-01-13", "2021-02-10", "2021-03-10", "2021-04-13",
+    "2021-05-12", "2021-06-10", "2021-07-13", "2021-08-11",
+    "2021-09-14", "2021-10-13", "2021-11-10", "2021-12-10",
+    # 2022
+    "2022-01-12", "2022-02-10", "2022-03-10", "2022-04-12",
+    "2022-05-11", "2022-06-10", "2022-07-13", "2022-08-10",
+    "2022-09-13", "2022-10-13", "2022-11-10", "2022-12-13",
+    # 2023
+    "2023-01-12", "2023-02-14", "2023-03-14", "2023-04-12",
+    "2023-05-10", "2023-06-13", "2023-07-12", "2023-08-10",
+    "2023-09-13", "2023-10-12", "2023-11-14", "2023-12-12",
+    # 2024
+    "2024-01-11", "2024-02-13", "2024-03-12", "2024-04-10",
+    "2024-05-15", "2024-06-12", "2024-07-11", "2024-08-14",
+    "2024-09-11", "2024-10-10", "2024-11-13", "2024-12-11",
+    # 2025
+    "2025-01-15", "2025-02-12", "2025-03-12", "2025-04-10",
+    "2025-05-13", "2025-06-11", "2025-07-11", "2025-08-12",
+    "2025-09-10", "2025-10-15", "2025-11-13", "2025-12-10",
+    # 2026
+    "2026-01-14", "2026-02-11", "2026-03-11", "2026-04-15",
+    "2026-05-13", "2026-06-10", "2026-07-14", "2026-08-12",
+    "2026-09-09", "2026-10-14", "2026-11-12", "2026-12-09",
+])
+
+MODEL_DIR = Path(__file__).parent / "models"
+US_MODEL_PATH = MODEL_DIR / "us_model.pkl"
+KR_MODEL_PATH = MODEL_DIR / "kr_model.pkl"
+
+# A/B 테스트용 모델 (calibrated 버전)
+US_MODEL_CAL_PATH = MODEL_DIR / "us_model_calibrated.pkl"
+KR_MODEL_CAL_PATH = MODEL_DIR / "kr_model_calibrated.pkl"
+
+# US 피처: KOSPI 제외 (달러 자산에 무관)
+US_FEATURE_COLS = [
+    "return_1d", "return_2d", "return_3d", "return_5d", "return_20d",
+    "vol_20d", "vol_ratio", "hl_range",
+    "volume_spike", "obv_vs_ma",
+    "rsi", "macd_hist", "stoch_k",
+    "bb_position", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
+    "return_entry_sma50", "return_entry_sma200",  # Retention context
+    "momentum_accel", "entry_confidence",  # Entry context
+    "vix_close", "vix_ret_1d",
+    "gold_ret_1d", "gold_ret_5d",
+    "usdkrw_ret_1d",
+    "tnx_ret_1d", "tnx_ret_5d",
+    "regime",
+    "return_60d", "return_120d",
+    "pct_from_52w_high", "pct_from_52w_low",
+    "days_to_fomc", "is_fomc_week",
+    "days_to_cpi",  "is_cpi_week",
+]
+
+# KR 피처: KOSPI + USDKRW 포함 (원화 자산 핵심 지표)
+KR_FEATURE_COLS = [
+    "return_1d", "return_2d", "return_3d", "return_5d", "return_20d",
+    "vol_20d", "vol_ratio", "hl_range",
+    "volume_spike", "obv_vs_ma",
+    "rsi", "macd_hist", "stoch_k",
+    "bb_position", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
+    "return_entry_sma50", "return_entry_sma200",  # Retention context
+    "momentum_accel", "entry_confidence",  # Entry context
+    "vix_close", "vix_ret_1d",
+    "gold_ret_1d", "gold_ret_5d",
+    "usdkrw_ret_1d", "usdkrw_ret_5d",   # KR: 원/달러 5일 추세도 추가
+    "tnx_ret_1d", "tnx_ret_5d",
+    "kospi_ret_1d", "kospi_ret_5d", "kospi_ret_20d",  # KR: KOSPI 흐름 필수
+    "kospi_rsi",                         # KR: KOSPI 과열/침체 신호
+    "usdkrw_vs_ma20",                    # KR: 원달러 이동평균 이탈도
+    "regime",
+    "return_60d", "return_120d",
+    "pct_from_52w_high", "pct_from_52w_low",
+    "days_to_fomc", "is_fomc_week",
+    "days_to_cpi",  "is_cpi_week",
+]
+
+MARKET_CONFIG = {
+    "us": {
+        "symbols":      US_SYMBOLS,
+        "features":     US_FEATURE_COLS,
+        "model_path":   US_MODEL_PATH,
+        "label":        "US",
+        "forward_days": 5,
+        "binary":       False,
+    },
+    "kr": {
+        "symbols":      KR_SYMBOLS,
+        "features":     KR_FEATURE_COLS,
+        "model_path":   KR_MODEL_PATH,
+        "label":        "KR",
+        "forward_days": 1,   # 1일 후 상승/하락 이진 분류
+        "binary":       True,
+    },
+}
 
 
 # ── Supabase 클라이언트 ────────────────────────────────────────────────────────
@@ -86,7 +308,6 @@ def get_supabase():
 
 def load_daily_indicators(client, symbols: list[str]) -> pd.DataFrame:
     """Supabase에서 지정 종목들의 daily_indicators 전체 로드"""
-    # market_master id 조회
     res = client.table("market_master").select("id, symbol").in_("symbol", symbols).execute()
     id_to_symbol = {r["id"]: r["symbol"] for r in res.data}
     ids = list(id_to_symbol.keys())
@@ -94,7 +315,6 @@ def load_daily_indicators(client, symbols: list[str]) -> pd.DataFrame:
     if not ids:
         raise ValueError(f"market_master에서 종목을 찾을 수 없습니다: {symbols}")
 
-    # daily_indicators 전체 로드 (1000건씩 페이지네이션)
     all_rows = []
     page_size = 1000
     offset = 0
@@ -141,16 +361,18 @@ def engineer_features(df: pd.DataFrame, cross: pd.DataFrame) -> pd.DataFrame:
 
         # ① 가격 모멘텀
         g["return_1d"]  = g["close"].pct_change(1)
+        g["return_2d"]  = g["close"].pct_change(2)
+        g["return_3d"]  = g["close"].pct_change(3)
         g["return_5d"]  = g["close"].pct_change(5)
         g["return_20d"] = g["close"].pct_change(20)
 
         # ② 변동성
         g["vol_20d"] = g["return_1d"].rolling(20).std()
 
-        # ③ 거래량 비율 (오늘 거래량 / 20일 평균)
+        # ③ 거래량 비율
         g["vol_ratio"] = g["volume"] / g["volume"].rolling(20).mean()
 
-        # ④ 볼린저 밴드 위치 (0 = 하단, 1 = 상단)
+        # ④ 볼린저 밴드 위치
         band_range = g["bollinger_upper"] - g["bollinger_lower"]
         g["bb_position"] = (g["close"] - g["bollinger_lower"]) / band_range.replace(0, np.nan)
 
@@ -162,20 +384,67 @@ def engineer_features(df: pd.DataFrame, cross: pd.DataFrame) -> pd.DataFrame:
         g["price_vs_sma120"] = (g["close"] / g["sma_120"] - 1).replace([np.inf, -np.inf], np.nan)
         g["price_vs_sma200"] = (g["close"] / g["sma_200"] - 1).replace([np.inf, -np.inf], np.nan)
 
-        # ⑦ 고가-저가 범위 (일중 변동성)
+        # ⑦ 고가-저가 범위
         g["hl_range"] = (g["high"] - g["low"]) / g["close"]
 
-        # ⑧ 크로스-에셋 조인 (VIX, 금, 달러)
+        # ⑧ 거래량 스파이크
+        g["volume_spike"] = (g["vol_ratio"] > 2.0).astype(int)
+
+        # ⑨ OBV
+        g["obv"] = (np.sign(g["close"].diff()) * g["volume"]).cumsum()
+        obv_ma20 = g["obv"].rolling(20).mean()
+        g["obv_vs_ma"] = (g["obv"] / obv_ma20.replace(0, np.nan) - 1)
+
+        # ⑩-a 중기 모멘텀
+        g["return_60d"]  = g["close"].pct_change(60)
+        g["return_120d"] = g["close"].pct_change(120)
+
+        # ⑩-b 52주 고/저가 대비 위치
+        g["pct_from_52w_high"] = g["close"] / g["close"].rolling(252).max() - 1
+        g["pct_from_52w_low"]  = g["close"] / g["close"].rolling(252).min() - 1
+
+        # ⑩ 크로스-에셋 조인
         g = g.merge(cross, on="as_of_date", how="left")
+
+        # ⑪ VIX 레짐
+        g["regime"] = 0
+        g.loc[g["vix_close"] < 15, "regime"] = 1
+        g.loc[g["vix_close"] > 25, "regime"] = 2
+        g.loc[g["vix_close"] > 35, "regime"] = 3
+
+        # ⑫ FOMC 이벤트 피처
+        def _days_to_next_fomc(dt):
+            future = FOMC_DATES[FOMC_DATES >= dt]
+            return (future[0] - dt).days if len(future) else 30
+        g["days_to_fomc"] = g["as_of_date"].apply(_days_to_next_fomc)
+        g["is_fomc_week"]  = (g["days_to_fomc"] <= 5).astype(int)
+
+        # ⑬ CPI 이벤트 피처
+        def _days_to_next_cpi(dt):
+            future = CPI_DATES[CPI_DATES >= dt]
+            return (future[0] - dt).days if len(future) else 30
+        g["days_to_cpi"] = g["as_of_date"].apply(_days_to_next_cpi)
+        g["is_cpi_week"]  = (g["days_to_cpi"] <= 5).astype(int)
+
+        # ⑭ Retention Context Features (진입 맥락)
+        # return_entry는 현재 가격이 주요 이동평균에서 얼마나 떨어져 있는지 추적
+        # 다양한 진입 포인트에서의 발동 조건을 파악하는 데 도움
+        g["return_entry_sma50"]  = (g["close"] - g["sma_50"]) / g["sma_50"].replace(0, np.nan)
+        g["return_entry_sma200"] = (g["close"] - g["sma_200"]) / g["sma_200"].replace(0, np.nan)
+        
+        # 단기-중기 모멘텀 차이 (가속도 추적)
+        g["momentum_accel"] = g["return_1d"] - g["return_1d"].shift(1)
+        
+        # 진입 신뢰도: 고/저 근처에서의 가격 위치
+        g["entry_confidence"] = (g["close"] - g["low"].rolling(20).min()) / (g["high"].rolling(20).max() - g["low"].rolling(20).min()).replace(0, np.nan)
 
         frames.append(g)
 
-    result = pd.concat(frames, ignore_index=True)
-    return result
+    return pd.concat(frames, ignore_index=True)
 
 
 def build_cross_asset(df_all: pd.DataFrame) -> pd.DataFrame:
-    """크로스-에셋 피처 테이블 생성 (날짜별 VIX, 금, 달러 수익률)"""
+    """크로스-에셋 피처 테이블 생성 — KR 추가 피처 포함"""
     rows = []
 
     for key, sym in CROSS_ASSET_SYMBOLS.items():
@@ -186,7 +455,19 @@ def build_cross_asset(df_all: pd.DataFrame) -> pd.DataFrame:
         sub[f"{key}_close"]  = sub["close"]
         sub[f"{key}_ret_1d"] = sub["close"].pct_change(1)
         sub[f"{key}_ret_5d"] = sub["close"].pct_change(5)
-        rows.append(sub[["as_of_date", f"{key}_close", f"{key}_ret_1d", f"{key}_ret_5d"]])
+        cols = ["as_of_date", f"{key}_close", f"{key}_ret_1d", f"{key}_ret_5d"]
+
+        # KR 전용 추가 피처
+        if key == "kospi":
+            sub["kospi_ret_20d"] = sub["close"].pct_change(20)
+            sub["kospi_rsi"]     = sub["rsi"]
+            cols += ["kospi_ret_20d", "kospi_rsi"]
+        elif key == "usdkrw":
+            ma20 = sub["close"].rolling(20).mean()
+            sub["usdkrw_vs_ma20"] = (sub["close"] / ma20.replace(0, np.nan) - 1)
+            cols += ["usdkrw_vs_ma20"]
+
+        rows.append(sub[cols])
 
     if not rows:
         return pd.DataFrame(columns=["as_of_date"])
@@ -200,25 +481,33 @@ def build_cross_asset(df_all: pd.DataFrame) -> pd.DataFrame:
 
 # ── 레이블 생성 ──────────────────────────────────────────────────────────────
 
-def make_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """5거래일 후 수익률 → 3분류 레이블"""
+def make_labels(
+    df: pd.DataFrame,
+    forward_days: int = FORWARD_DAYS,
+    binary: bool = False,
+) -> pd.DataFrame:
+    """
+    n거래일 후 수익률 → 레이블 생성
+    binary=True : 1일 후 상승(1) / 하락(0) 이진 분류
+    binary=False: forward_days 후 수익률 기반 3분류 (매수/관망/매도)
+    """
     frames = []
 
     for symbol, grp in df.groupby("symbol"):
         g = grp.copy().sort_values("as_of_date").reset_index(drop=True)
 
-        # 5일 후 종가 수익률
-        g["forward_5d"] = g["close"].shift(-FORWARD_DAYS) / g["close"] - 1
+        g["forward_ret"] = g["close"].shift(-forward_days) / g["close"] - 1
 
-        # 종목별 임계값
-        buy_th, sell_th = LEVERAGE_THRESHOLDS.get(
-            symbol,
-            (LABEL_THRESHOLDS["buy"], LABEL_THRESHOLDS["sell"])
-        )
-
-        g["label"] = 0  # 관망
-        g.loc[g["forward_5d"] >= buy_th,  "label"] =  1  # 매수
-        g.loc[g["forward_5d"] <= sell_th, "label"] = -1  # 매도
+        if binary:
+            g["label"] = (g["forward_ret"] > 0).astype(int)  # 1=상승, 0=하락
+        else:
+            buy_th, sell_th = LEVERAGE_THRESHOLDS.get(
+                symbol,
+                (LABEL_THRESHOLDS["buy"], LABEL_THRESHOLDS["sell"])
+            )
+            g["label"] = 0
+            g.loc[g["forward_ret"] >= buy_th,  "label"] =  1
+            g.loc[g["forward_ret"] <= sell_th, "label"] = -1
 
         frames.append(g)
 
@@ -227,66 +516,208 @@ def make_labels(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── 학습 ────────────────────────────────────────────────────────────────────
 
-FEATURE_COLS = [
-    # 모멘텀
-    "return_1d", "return_5d", "return_20d",
-    # 변동성
-    "vol_20d", "vol_ratio", "hl_range",
-    # 기술적 지표
-    "rsi", "macd_hist", "stoch_k",
-    "bb_position", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
-    # 크로스-에셋
-    "vix_close", "vix_ret_1d",
-    "gold_ret_1d", "gold_ret_5d",
-    "usdkrw_ret_1d",
-    "tnx_ret_1d", "tnx_ret_5d",
-]
+def walk_forward_validation(
+    X: pd.DataFrame,
+    y_lgb: pd.Series,
+    lgb_params: dict,
+    n_splits: int = 5,
+    train_months: int = 24,
+    market_label: str = "",
+) -> list[float]:
+    """
+    월 단위 Walk-Forward Validation.
+    매 스텝마다 최근 train_months 개월 데이터로 재학습 후 다음 달 검증.
+    returns: fold별 accuracy 리스트
+    """
+    tag = f"[{market_label}]" if market_label else ""
+    dates = X.index  # as_of_date가 index에 있어야 함 (호출 전 set_index 필요)
+    unique_months = pd.Series(dates).dt.to_period("M").unique()
+    unique_months = sorted(unique_months)
+
+    if len(unique_months) < train_months + n_splits:
+        print(f"[WARN]{tag} 데이터 부족으로 Walk-Forward 스킵 "
+              f"({len(unique_months)}개월 < {train_months + n_splits})", file=sys.stderr)
+        return []
+
+    scores = []
+    eval_months = unique_months[train_months:][:n_splits]
+
+    print(f"\n{tag} Walk-Forward Validation ({n_splits} steps, train={train_months}M)...",
+          file=sys.stderr)
+
+    for i, val_month in enumerate(eval_months):
+        train_end   = val_month - 1
+        train_start = train_end - train_months + 1
+
+        train_mask = pd.Series(dates).dt.to_period("M").between(train_start, train_end).values
+        val_mask   = (pd.Series(dates).dt.to_period("M") == val_month).values
+
+        if train_mask.sum() < 50 or val_mask.sum() < 5:
+            continue
+
+        X_tr, X_val = X.iloc[train_mask], X.iloc[val_mask]
+        y_tr, y_val = y_lgb.iloc[train_mask], y_lgb.iloc[val_mask]
+
+        m = lgb.LGBMClassifier(**lgb_params)
+        m.fit(X_tr, y_tr, callbacks=[lgb.log_evaluation(0)])
+        acc = accuracy_score(y_val, m.predict(X_val))
+        scores.append(acc)
+        print(f"  Step {i+1} ({val_month}): accuracy={acc:.4f} / "
+              f"train={len(X_tr)} val={len(X_val)}", file=sys.stderr)
+
+    if scores:
+        print(f"{tag} Walk-Forward CV: {np.mean(scores):.4f} ± {np.std(scores):.4f}",
+              file=sys.stderr)
+    return scores
 
 
-def train(df: pd.DataFrame):
-    """TimeSeriesSplit 기반 학습 + 최종 전체 데이터 학습"""
+def optuna_tune(
+    X: pd.DataFrame,
+    y_lgb: pd.Series,
+    n_trials: int = 50,
+    market_label: str = "",
+    binary: bool = False,
+    forward_days: int = FORWARD_DAYS,
+) -> dict:
+    """Optuna로 LightGBM 하이퍼파라미터 최적화 (3-fold TimeSeriesSplit)"""
+    if not OPTUNA_AVAILABLE:
+        print("[WARN] optuna 미설치 → 튜닝 스킵. pip install optuna", file=sys.stderr)
+        return {}
 
-    # 마지막 FORWARD_DAYS 행은 레이블 없음 → 제거
-    df_train = df.dropna(subset=["label", "forward_5d"]).copy()
-    df_train = df_train[df_train["forward_5d"].notna()]
+    tscv = TimeSeriesSplit(n_splits=3, gap=forward_days)
 
-    # 사용 가능한 피처만 선택
-    available_features = [c for c in FEATURE_COLS if c in df_train.columns]
-    missing = [c for c in FEATURE_COLS if c not in df_train.columns]
+    def objective(trial: "optuna.Trial") -> float:
+        base_params = {
+            "verbose":           -1,
+            "is_unbalance":      True,
+            "bagging_freq":      5,
+            "n_estimators":      trial.suggest_int("n_estimators", 300, 800),
+            "num_leaves":        trial.suggest_int("num_leaves", 20, 100),
+            "max_depth":         trial.suggest_int("max_depth", 4, 8),
+            "learning_rate":     trial.suggest_float("learning_rate", 0.02, 0.1, log=True),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 50),
+            "feature_fraction":  trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction":  trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "reg_alpha":         trial.suggest_float("reg_alpha", 0.0, 1.0),
+            "reg_lambda":        trial.suggest_float("reg_lambda", 0.0, 1.0),
+            "min_split_gain":    trial.suggest_float("min_split_gain", 0.0, 0.1),
+        }
+        if binary:
+            base_params.update({"objective": "binary", "metric": "binary_logloss"})
+        else:
+            base_params.update({"objective": "multiclass", "num_class": 3, "metric": "multi_logloss"})
+
+        fold_scores = []
+        for train_idx, val_idx in tscv.split(X):
+            X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_tr, y_val = y_lgb.iloc[train_idx], y_lgb.iloc[val_idx]
+
+            model = lgb.LGBMClassifier(**base_params)
+            model.fit(
+                X_tr, y_tr,
+                eval_set=[(X_val, y_val)],
+                callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(0)],
+            )
+            fold_scores.append(balanced_accuracy_score(y_val, model.predict(X_val)))
+
+        return float(np.mean(fold_scores))
+
+    tag = f"[{market_label}]" if market_label else ""
+    mode = "binary" if binary else "multiclass"
+    print(f"\n[OPTUNA]{tag} {n_trials}회 탐색 시작 (3-fold / {mode} / balanced_accuracy)...", file=sys.stderr)
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    best = study.best_params
+    print(f"[OPTUNA]{tag} 최적 Balanced Accuracy: {study.best_value:.4f}", file=sys.stderr)
+    for k, v in best.items():
+        print(f"  {k:25s}: {v}", file=sys.stderr)
+
+    return best
+
+
+def train_market(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    model_path: Path,
+    market_label: str = "",
+    tune: bool = False,
+    n_trials: int = 50,
+    stack: bool = False,
+    walk_forward: bool = False,
+    binary: bool = False,
+    forward_days: int = FORWARD_DAYS,
+    calibration: str = "platt",  # "platt", "iso", "beta", "all"
+):
+    """단일 시장(US 또는 KR) 모델 학습"""
+    tag = f"[{market_label}]" if market_label else ""
+
+    df_train = df.dropna(subset=["label", "forward_ret"]).copy()
+    df_train = df_train[df_train["forward_ret"].notna()]
+
+    available_features = [c for c in feature_cols if c in df_train.columns]
+    missing = [c for c in feature_cols if c not in df_train.columns]
     if missing:
-        print(f"[WARN] 누락 피처 (스킵): {missing}", file=sys.stderr)
+        print(f"[WARN]{tag} 누락 피처 (스킵): {missing}", file=sys.stderr)
 
-    # 날짜순 정렬 (TimeSeriesSplit 전제)
     df_train = df_train.sort_values("as_of_date").reset_index(drop=True)
 
     X = df_train[available_features].astype(float)
-    y = df_train["label"].astype(int)  # -1, 0, 1
+    y = df_train["label"].astype(int)
+    # binary: label은 0/1 그대로, multiclass: -1→0, 0→1, 1→2
+    y_lgb = y if binary else (y + 1)
 
-    # LightGBM은 클래스가 0-indexed여야 함 → +1 해서 0/1/2로 변환
-    y_lgb = y + 1  # -1→0, 0→1, 1→2
+    print(f"\n{tag} 학습 데이터: {len(X)}행 / 피처: {len(available_features)}개", file=sys.stderr)
+    if binary:
+        print(f"{tag} 레이블 분포: 하락={(y==0).sum()} / 상승={(y==1).sum()} "
+              f"(상승비율={((y==1).sum()/len(y)*100):.1f}%)", file=sys.stderr)
+    else:
+        print(f"{tag} 레이블 분포: 매도={(y==-1).sum()} / 관망={(y==0).sum()} / 매수={(y==1).sum()}", file=sys.stderr)
+    print(f"{tag} 종목: {sorted(df_train['symbol'].unique().tolist())}", file=sys.stderr)
 
-    print(f"\n[INFO] 학습 데이터: {len(X)}행 / 피처: {len(available_features)}개", file=sys.stderr)
-    print(f"[INFO] 레이블 분포: 매도={( y==-1).sum()} / 관망={(y==0).sum()} / 매수={(y==1).sum()}", file=sys.stderr)
-
-    # TimeSeriesSplit 교차검증
-    tscv = TimeSeriesSplit(n_splits=5, gap=FORWARD_DAYS)
+    tscv = TimeSeriesSplit(n_splits=5, gap=forward_days)
     cv_scores = []
 
-    lgb_params = {
-        "objective": "multiclass",
-        "num_class": 3,
-        "metric": "multi_logloss",
-        "learning_rate": 0.05,
-        "num_leaves": 31,
-        "min_child_samples": 20,
-        "feature_fraction": 0.8,
-        "bagging_fraction": 0.8,
-        "bagging_freq": 5,
-        "verbose": -1,
-        "n_estimators": 500,
-    }
+    if binary:
+        lgb_params = {
+            "objective":         "binary",
+            "metric":            "binary_logloss",
+            "learning_rate":     0.05,
+            "num_leaves":        31,
+            "min_child_samples": 20,
+            "feature_fraction":  0.8,
+            "bagging_fraction":  0.8,
+            "bagging_freq":      5,
+            "verbose":           -1,
+            "n_estimators":      500,
+            "is_unbalance":      True,
+        }
+    else:
+        lgb_params = {
+            "objective":         "multiclass",
+            "num_class":         3,
+            "metric":            "multi_logloss",
+            "learning_rate":     0.05,
+            "num_leaves":        31,
+            "min_child_samples": 20,
+            "feature_fraction":  0.8,
+            "bagging_fraction":  0.8,
+            "bagging_freq":      5,
+            "verbose":           -1,
+            "n_estimators":      500,
+            "is_unbalance":      True,
+        }
 
-    print("\n[INFO] TimeSeriesSplit 교차검증 시작...", file=sys.stderr)
+    if tune:
+        best_params = optuna_tune(
+            X, y_lgb, n_trials=n_trials,
+            market_label=market_label, binary=binary, forward_days=forward_days,
+        )
+        if best_params:
+            lgb_params.update(best_params)
+
+    bal_scores = []
+    print(f"\n{tag} TimeSeriesSplit 교차검증 시작...", file=sys.stderr)
     for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
         X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_tr, y_val = y_lgb.iloc[train_idx], y_lgb.iloc[val_idx]
@@ -300,106 +731,238 @@ def train(df: pd.DataFrame):
 
         preds = model_cv.predict(X_val)
         acc = accuracy_score(y_val, preds)
+        bal_acc = balanced_accuracy_score(y_val, preds)
         cv_scores.append(acc)
-        print(f"  Fold {fold+1}: accuracy={acc:.4f} / val_size={len(val_idx)}", file=sys.stderr)
+        bal_scores.append(bal_acc)
+        print(f"  Fold {fold+1}: accuracy={acc:.4f} / balanced={bal_acc:.4f} / val_size={len(val_idx)}", file=sys.stderr)
 
-    print(f"\n[RESULT] CV Accuracy: {np.mean(cv_scores):.4f} ± {np.std(cv_scores):.4f}", file=sys.stderr)
-    print(f"[RESULT] 폴드별: {[f'{s:.4f}' for s in cv_scores]}", file=sys.stderr)
+    print(f"\n{tag} CV Accuracy:     {np.mean(cv_scores):.4f} ± {np.std(cv_scores):.4f}", file=sys.stderr)
+    print(f"{tag} CV Balanced Acc: {np.mean(bal_scores):.4f} ± {np.std(bal_scores):.4f}", file=sys.stderr)
 
-    # 전체 데이터로 최종 모델 학습
-    print("\n[INFO] 전체 데이터로 최종 모델 학습 중...", file=sys.stderr)
-    final_model = lgb.LGBMClassifier(**lgb_params)
-    final_model.fit(X, y_lgb, callbacks=[lgb.log_evaluation(0)])
+    if walk_forward:
+        X_wf = X.copy()
+        X_wf.index = df_train["as_of_date"].values
+        walk_forward_validation(X_wf, y_lgb, lgb_params, market_label=market_label)
 
-    # 피처 중요도 출력
-    importances = pd.Series(final_model.feature_importances_, index=available_features)
+    print(f"\n{tag} 전체 데이터로 최종 모델 학습 중...", file=sys.stderr)
+    base_model = lgb.LGBMClassifier(**lgb_params)
+    base_model.fit(X, y_lgb, callbacks=[lgb.log_evaluation(0)])
+
+    # ==================== Calibration 방식 선택 ====================
+    calibration_methods = []
+    if calibration == "all":
+        # Beta Calibration은 binary classification만 지원
+        if n_classes == 2:
+            calibration_methods = ["platt", "iso", "beta"]
+        else:
+            # Multiclass: Platt과 ISO만 사용 (Beta는 복잡하고 multiclass에 비효율)
+            calibration_methods = ["platt", "iso"]
+            print(f"\n{tag} Beta Calibration은 multiclass에서 지원하지 않음 (Platt/ISO만 사용)", file=sys.stderr)
+    else:
+        calibration_methods = [calibration]
+    
+    models_to_save = []
+
+    for cal_method in calibration_methods:
+        print(f"\n{tag} [{cal_method.upper()}] Calibration 적용 중...", file=sys.stderr)
+
+        if cal_method == "platt":
+            # Platt Scaling (시그모이드 함수)
+            model_cal_base = lgb.LGBMClassifier(**lgb_params)
+            model_cal_base.fit(X, y_lgb, callbacks=[lgb.log_evaluation(0)])
+            model_cal = CalibratedClassifierCV(model_cal_base, method="sigmoid", cv=3)
+            model_cal.fit(X, y_lgb)
+            cal_name = "platt_scaling"
+
+        elif cal_method == "iso":
+            # ISO Regression (isotonic calibration)
+            model_cal_base = lgb.LGBMClassifier(**lgb_params)
+            model_cal_base.fit(X, y_lgb, callbacks=[lgb.log_evaluation(0)])
+            model_cal = CalibratedClassifierCV(model_cal_base, method="isotonic", cv=3)
+            model_cal.fit(X, y_lgb)
+            cal_name = "iso_regression"
+
+        elif cal_method == "beta":
+            # Beta Calibration (커스텀 구현, binary only)
+            if n_classes == 2:
+                model_cal_base = lgb.LGBMClassifier(**lgb_params)
+                model_cal = BetaCalibratedModel(model_cal_base)
+                model_cal.fit(X.values, y_lgb.values)
+                cal_name = "beta_calibration"
+            else:
+                print(f"  {tag} [BETA] Skipped for multiclass problem", file=sys.stderr)
+                continue
+        
+        probs_sample = model_cal.predict_proba(X[:100])
+        print(f"  {tag} [{cal_method.upper()}] 신뢰도 샘플: min={probs_sample[:, 1].min():.4f} / max={probs_sample[:, 1].max():.4f} / avg={probs_sample[:, 1].mean():.4f}", file=sys.stderr)
+        
+        models_to_save.append({
+            "method": cal_method,
+            "model": model_cal,
+            "name": cal_name,
+        })
+
+    # 피처 중요도
+    importances = pd.Series(base_model.feature_importances_, index=available_features)
     importances = importances.sort_values(ascending=False)
-    print("\n[INFO] 피처 중요도 (상위 10):", file=sys.stderr)
+    print(f"\n{tag} 피처 중요도 (상위 10):", file=sys.stderr)
     for feat, imp in importances.head(10).items():
         print(f"  {feat:30s}: {imp}", file=sys.stderr)
 
     # 모델 저장
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({
-        "model": final_model,
-        "features": available_features,
-        "cv_accuracy": float(np.mean(cv_scores)),
-        "trained_at": date.today().isoformat(),
-    }, MODEL_PATH)
-    print(f"\n[OK] 모델 저장: {MODEL_PATH}", file=sys.stderr)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    for model_info in models_to_save:
+        cal_method = model_info["method"]
+        model_cal = model_info["model"]
+        cal_name = model_info["name"]
+        
+        # 저장 경로 (calibration 방식에 따라 다름)
+        if calibration == "all":
+            save_path = model_path.with_stem(f"{model_path.stem}_{cal_method}")
+        else:
+            save_path = model_path
+        
+        joblib.dump({
+            "model":              model_cal,
+            "features":           available_features,
+            "cv_accuracy":        float(np.mean(cv_scores)),
+            "cv_balanced_acc":    float(np.mean(bal_scores)),
+            "lgb_params":         lgb_params,"trained_at":         date.today().isoformat(),
+            "market":             market_label,
+            "symbols":            sorted(df_train["symbol"].unique().tolist()),
+            "binary":             binary,
+            "calibration_method": cal_name,
+            "model_version":      "CALIBRATED",
+        }, save_path)
+        print(f"{tag} [{cal_method.upper()}] 저장: {save_path}", file=sys.stderr)
 
-    return final_model, available_features, df_train
+    # 모델 정보 반환 (예측 시 필요)
+    return {
+        "model": models_to_save[0]["model"] if models_to_save else base_model,
+        "features": available_features,
+    }, available_features, df_train
 
 
 # ── 예측 및 Supabase upsert ──────────────────────────────────────────────────
 
-def predict_and_upsert(client, model, features: list[str], df: pd.DataFrame):
-    """최신 날짜 데이터로 예측 → ai_predictions 테이블에 upsert"""
-    label_map = {0: "SELL", 1: "HOLD", 2: "BUY"}
-    signal_label_map = {
-        "BUY":  "BUY",
-        "HOLD": "HOLD",
-        "SELL": "SELL",
-    }
+def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_version: str = "all"):
+    """
+    예측 및 Supabase upsert
+    
+    model_specs: [{"model": ..., "features": [...], "symbols": [...], ...}, ...]
+    각 종목에 알맞은 모델로 예측 후 ai_predictions + signal_history upsert
+    """
+    # symbol → model spec 매핑
+    symbol_to_spec = {}
+    for spec in model_specs:
+        for sym in spec["symbols"]:
+            symbol_to_spec[sym] = spec
 
-    # 종목별 최신 행만 추출
     latest = df.sort_values("as_of_date").groupby("symbol").last().reset_index()
 
     rows_to_upsert = []
     for _, row in latest.iterrows():
         symbol = row["symbol"]
 
+        spec = symbol_to_spec.get(symbol)
+        if spec is None:
+            print(f"[WARN] {symbol}: 매핑된 모델 없음, 스킵", file=sys.stderr)
+            continue
+
+        features = spec["features"]
+        is_binary = spec.get("binary", False)
+        model = spec.get("model")
+        
+        if model is None:
+            print(f"[WARN] {symbol}: 모델이 없음, 스킵", file=sys.stderr)
+            continue
+
         X_pred = pd.DataFrame([row[features].values], columns=features, dtype=float)
         if X_pred.isnull().all(axis=1).iloc[0]:
             print(f"[WARN] {symbol}: 피처 전부 null, 예측 스킵", file=sys.stderr)
             continue
 
-        proba = model.predict_proba(X_pred)[0]  # [P(SELL), P(HOLD), P(BUY)]
-        pred_class = int(model.predict(X_pred)[0])  # 0/1/2
-        pred_label = label_map[pred_class]
+        proba = model.predict_proba(X_pred)[0]
+        pred_class = int(model.predict(X_pred)[0])
 
-        # signal_score: 0~100 (BUY 확률 기반)
-        buy_prob  = float(proba[2])
-        sell_prob = float(proba[0])
-        signal_score = int((buy_prob - sell_prob + 1) / 2 * 100)  # 0~100
-
-        # ai_predictions 스키마에 맞게
-        signal_label = {
-            "BUY": "BUY", "HOLD": "HOLD", "SELL": "SELL"
-        }[pred_label]
-
-        contributions = [
-            {"feature": f, "value": float(row[f]) if pd.notna(row.get(f)) else None}
-            for f in features[:5]  # 상위 5개 피처만
-        ]
-
-        rows_to_upsert.append({
-            "ticker":       symbol,
-            "date":         str(row["as_of_date"].date()),
-            "signal_score": signal_score,
-            "signal_label": signal_label,
-            "lgbm_prob":    buy_prob,
-            "contributions": json.dumps(contributions),
-            "breakdown": json.dumps({
+        if is_binary:
+            # binary: proba=[P(down), P(up)], classes=[0,1]
+            label_map_spec = {0: "SELL", 1: "BUY"}
+            buy_prob  = float(proba[1])
+            sell_prob = float(proba[0])
+            breakdown = {"up_prob": round(buy_prob, 4), "down_prob": round(sell_prob, 4)}
+            log_extra = f"up={buy_prob:.2f} down={sell_prob:.2f}"
+        else:
+            # multiclass: proba=[P(SELL), P(HOLD), P(BUY)], classes=[0,1,2]
+            label_map_spec = {0: "SELL", 1: "HOLD", 2: "BUY"}
+            buy_prob  = float(proba[2])
+            sell_prob = float(proba[0])
+            breakdown = {
                 "buy_prob":  round(buy_prob, 4),
                 "hold_prob": round(float(proba[1]), 4),
                 "sell_prob": round(sell_prob, 4),
-            }),
+            }
+            log_extra = f"buy={buy_prob:.2f} hold={float(proba[1]):.2f} sell={sell_prob:.2f}"
+
+        pred_label   = label_map_spec[pred_class]
+        signal_score = int((buy_prob - sell_prob + 1) / 2 * 100)
+
+        contributions = [
+            {"feature": f, "value": float(row[f]) if pd.notna(row.get(f)) else None}
+            for f in features[:5]
+        ]
+
+        rows_to_upsert.append({
+            "ticker":        symbol,
+            "date":          str(row["as_of_date"].date()),
+            "signal_score":  signal_score,
+            "signal_label":  pred_label,
+            "lgbm_prob":     buy_prob,
+            "contributions": json.dumps(contributions),
+            "breakdown":     json.dumps(breakdown),
+            "entry_price":   float(row["close"]) if pd.notna(row.get("close")) else None,
+            "entry_date":    str(row["as_of_date"].date()),
             "summary_text": (
-                f"{symbol} LightGBM 예측: {pred_label} "
-                f"(매수확률 {buy_prob*100:.1f}% / 매도확률 {sell_prob*100:.1f}%)"
+                f"{symbol} LightGBM ({spec.get('market', '?')}) 예측: {pred_label} "
+                f"(상승확률 {buy_prob*100:.1f}% / 하락확률 {sell_prob*100:.1f}%)"
             ),
         })
 
-        print(f"  {symbol:6s}: {pred_label:4s} | score={signal_score} | "
-              f"buy={buy_prob:.2f} hold={float(proba[1]):.2f} sell={sell_prob:.2f}",
+        print(f"  [{spec.get('market','?')}] {symbol:12s}: {pred_label:4s} | score={signal_score} | {log_extra}",
               file=sys.stderr)
 
     if rows_to_upsert:
-        client.table("ai_predictions").upsert(
-            rows_to_upsert, on_conflict="ticker,date"
+        # A/B 테스트 마킹 컬럼 추가
+        # (기존 ai_predictions 테이블이 지원하면 저장, 아니면 로깅만)
+        try:
+            client.table("ai_predictions").upsert(
+                rows_to_upsert, on_conflict="ticker,date"
+            ).execute()
+            print(f"\n[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료", file=sys.stderr)
+        except Exception as e:
+            print(f"[WARN] ai_predictions upsert 실패: {e}", file=sys.stderr)
+            # 모델 버전 정보 제거하고 재시도
+            for row in rows_to_upsert:
+                row.pop("model_version", None)
+            client.table("ai_predictions").upsert(
+                rows_to_upsert, on_conflict="ticker,date"
+            ).execute()
+            print(f"[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료 (model_version 제외)", file=sys.stderr)
+
+        history_rows = [
+            {
+                "etf_code":        r["ticker"],
+                "as_of_date":      r["date"],
+                "signal":          r["signal_label"],
+                "predicted_score": r["signal_score"],
+            }
+            for r in rows_to_upsert
+        ]
+        client.table("signal_history").upsert(
+            history_rows, on_conflict="etf_code,as_of_date"
         ).execute()
-        print(f"\n[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료", file=sys.stderr)
+        print(f"[OK] signal_history에 {len(history_rows)}건 기록 완료", file=sys.stderr)
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -408,49 +971,138 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--predict-only", action="store_true",
                         help="저장된 모델로 예측만 수행 (학습 스킵)")
+    parser.add_argument("--tune", action="store_true",
+                        help="Optuna 하이퍼파라미터 튜닝 후 학습")
+    parser.add_argument("--n-trials", type=int, default=50,
+                        help="Optuna 탐색 횟수 (기본 50)")
+    parser.add_argument("--market", choices=["us", "kr", "all"], default="all",
+                        help="학습/예측할 시장 선택 (기본: all)")
+    parser.add_argument("--stack", action="store_true",
+                        help="LightGBM + LogisticRegression Stacking 앙상블 사용")
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="월 단위 Walk-Forward Validation 추가 실행")
+    parser.add_argument("--calibration", choices=["platt", "iso", "beta", "all"], default="platt",
+                        help="Calibration 방식 선택: platt (기본), iso, beta, all (세 가지 모두)")
+    parser.add_argument("--ab-version", choices=["A", "B", "all"], default="all",
+                        help="A/B 테스트 버전 선택: A(원본), B(캘리브된), all(양쪽, default)")
     args = parser.parse_args()
 
     client = get_supabase()
 
-    if args.predict_only:
-        # 저장된 모델 로드
-        if not MODEL_PATH.exists():
-            print("ERROR: 저장된 모델 없음. 먼저 python train_lgbm.py 실행하세요.", file=sys.stderr)
-            sys.exit(1)
-        saved = joblib.load(MODEL_PATH)
-        model    = saved["model"]
-        features = saved["features"]
-        print(f"[INFO] 모델 로드: {MODEL_PATH} (학습일: {saved['trained_at']}, CV acc: {saved['cv_accuracy']:.4f})", file=sys.stderr)
+    # 어떤 시장을 처리할지 결정
+    markets = ["us", "kr"] if args.market == "all" else [args.market]
 
-        # 최신 데이터만 로드 (예측용)
-        all_syms = TARGET_SYMBOLS + list(CROSS_ASSET_SYMBOLS.values())
-        df_raw = load_daily_indicators(client, all_syms)
-        cross  = build_cross_asset(df_raw)
-        df_raw = df_raw[df_raw["symbol"].isin(TARGET_SYMBOLS)]
-        df_feat = engineer_features(df_raw, cross)
+    # 데이터 로드 (한 번만)
+    all_syms = TARGET_SYMBOLS + list(CROSS_ASSET_SYMBOLS.values())
+    print("[INFO] 데이터 로드 중...", file=sys.stderr)
+    df_raw = load_daily_indicators(client, all_syms)
+
+    print("[INFO] 크로스-에셋 피처 생성 중...", file=sys.stderr)
+    cross = build_cross_asset(df_raw)
+
+    df_target = df_raw[df_raw["symbol"].isin(TARGET_SYMBOLS)].copy()
+    df_feat = engineer_features(df_target, cross)
+
+    if args.predict_only:
+        # 저장된 모델 로드 후 예측만
+        model_specs = []
+        for mkt in markets:
+            cfg = MARKET_CONFIG[mkt]
+            
+            # Model A 로드
+            model_a_path = cfg["model_path"]
+            model_b_path = model_a_path.with_stem(model_a_path.stem + "_calibrated")
+            
+            spec_item = {}
+            
+            if args.ab_version in ["A", "all"]:
+                if not model_a_path.exists():
+                    print(f"[WARN] {cfg['label']} Model A 없음: {model_a_path}", file=sys.stderr)
+                else:
+                    saved_a = joblib.load(model_a_path)
+                    print(f"[INFO] {cfg['label']} Model A 로드 (학습일: {saved_a['trained_at']}, "
+                          f"CV acc: {saved_a['cv_accuracy']:.4f}, calibration: {saved_a.get('calibration_method', 'unknown')})", file=sys.stderr)
+                    spec_item["model_a"] = saved_a["model"]
+                    spec_item["features"] = saved_a["features"]
+                    spec_item["binary"] = saved_a.get("binary", False)
+
+            if args.ab_version in ["B", "all"]:
+                if not model_b_path.exists():
+                    print(f"[WARN] {cfg['label']} Model B 없음: {model_b_path}", file=sys.stderr)
+                else:
+                    saved_b = joblib.load(model_b_path)
+                    print(f"[INFO] {cfg['label']} Model B 로드 (학습일: {saved_b['trained_at']}, "
+                          f"CV acc: {saved_b['cv_accuracy']:.4f}, calibration: {saved_b.get('calibration_method', 'unknown')})", file=sys.stderr)
+                    spec_item["model_b"] = saved_b["model"]
+                    if "features" not in spec_item:
+                        spec_item["features"] = saved_b["features"]
+                        spec_item["binary"] = saved_b.get("binary", False)
+
+            if spec_item:
+                spec_item["symbols"] = cfg["symbols"]
+                spec_item["market"] = cfg["label"]
+                model_specs.append(spec_item)
+
+        if not model_specs:
+            print("ERROR: 사용 가능한 저장 모델이 없습니다. 먼저 학습을 실행하세요.", file=sys.stderr)
+            sys.exit(1)
 
         print("\n[INFO] 예측 결과:", file=sys.stderr)
-        predict_and_upsert(client, model, features, df_feat)
+        predict_and_upsert(client, model_specs, df_feat, ab_version=args.ab_version)
 
     else:
-        # 전체 학습 흐름
-        all_syms = TARGET_SYMBOLS + list(CROSS_ASSET_SYMBOLS.values())
+        # 학습 + 예측 — 시장별로 forward_days/binary 다르게 레이블 생성
+        labeled_parts = []
+        for mkt in markets:
+            cfg = MARKET_CONFIG[mkt]
+            df_mkt_raw = df_feat[df_feat["symbol"].isin(cfg["symbols"])].copy()
+            labeled_parts.append(make_labels(
+                df_mkt_raw,
+                forward_days=cfg["forward_days"],
+                binary=cfg["binary"],
+            ))
+        df_labeled = pd.concat(labeled_parts, ignore_index=True)
+        model_specs = []
 
-        print("[INFO] 데이터 로드 중...", file=sys.stderr)
-        df_raw = load_daily_indicators(client, all_syms)
+        for mkt in markets:
+            cfg = MARKET_CONFIG[mkt]
+            df_mkt = df_labeled[df_labeled["symbol"].isin(cfg["symbols"])].copy()
 
-        print("[INFO] 크로스-에셋 피처 생성 중...", file=sys.stderr)
-        cross = build_cross_asset(df_raw)
+            if df_mkt.empty:
+                print(f"[WARN] {cfg['label']}: 데이터 없음, 스킵", file=sys.stderr)
+                continue
 
-        df_target = df_raw[df_raw["symbol"].isin(TARGET_SYMBOLS)].copy()
-        df_feat = engineer_features(df_target, cross)
-        df_labeled = make_labels(df_feat)
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"  {cfg['label']} 모델 학습 (forward={cfg['forward_days']}일 / "
+                  f"{'이진' if cfg['binary'] else '3분류'})", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
 
-        print("[INFO] 학습 시작...", file=sys.stderr)
-        model, features, df_train = train(df_labeled)
+            models_dict, features, _ = train_market(
+                df_mkt,
+                feature_cols=cfg["features"],
+                model_path=cfg["model_path"],
+                market_label=cfg["label"],
+                tune=args.tune,
+                n_trials=args.n_trials,
+                stack=args.stack,
+                walk_forward=args.walk_forward,
+                binary=cfg["binary"],
+                forward_days=cfg["forward_days"],
+                calibration=args.calibration,  # ← 파라미터 전달
+            )
+
+            # Model spec 구성 (calibration 방식에 상관없이 첫 모델 사용)
+            spec_item = {
+                "model": models_dict["model"],
+                "features": features,
+                "symbols":  cfg["symbols"],
+                "market":   cfg["label"],
+                "binary":   cfg["binary"],
+            }
+            model_specs.append(spec_item)
 
         print("\n[INFO] 최신 예측 생성 중...", file=sys.stderr)
-        predict_and_upsert(client, model, features, df_labeled)
+        predict_and_upsert(client, model_specs, df_labeled, ab_version=args.ab_version)
 
     print("\n[DONE]", file=sys.stderr)
 

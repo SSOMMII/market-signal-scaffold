@@ -16,11 +16,21 @@ on:
         options:
           - predict-only   # 저장된 모델로 예측만 (매일)
           - train          # 전체 재학습 + 예측 (주 1회 권장)
+          - train-tune     # Optuna 튜닝 포함 전체 재학습 (~30분)
+      market:
+        description: "학습 대상 시장"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - us
+          - kr
 
 jobs:
   predict:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -35,30 +45,48 @@ jobs:
       - name: Install dependencies
         run: |
           pip install \
-            yfinance pandas ta \
-            lightgbm scikit-learn joblib \
+            yfinance pandas ta pykrx \
+            lightgbm scikit-learn joblib optuna \
             supabase
 
-      # 학습된 모델을 GitHub Actions cache에 저장/복원
+      # KR/US 분리 모델 캐시 (us_model.pkl + kr_model.pkl)
       - name: Restore model cache
         id: model-cache
         uses: actions/cache@v4
         with:
-          path: scripts/models/lgbm_model.pkl
-          key: lgbm-model-${{ hashFiles('scripts/train_lgbm.py') }}
-          restore-keys: lgbm-model-
+          path: |
+            scripts/models/us_model.pkl
+            scripts/models/kr_model.pkl
+          key: lgbm-models-${{ hashFiles('scripts/train_lgbm.py') }}
+          restore-keys: lgbm-models-
 
-      # 모델이 없거나 수동으로 train 선택 시 전체 학습
-      - name: Train (모델 없음 또는 수동 train 선택)
-        if: steps.model-cache.outputs.cache-hit != 'true' || github.event.inputs.mode == 'train'
+      # Optuna 튜닝 포함 전체 재학습 (수동: train-tune)
+      - name: Train with Optuna tuning
+        if: github.event.inputs.mode == 'train-tune'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python scripts/train_lgbm.py
+        run: |
+          MARKET="${{ github.event.inputs.market || 'all' }}"
+          python scripts/train_lgbm.py --tune --n-trials 50 --market "$MARKET"
 
-      # 모델 있으면 예측만
+      # 튜닝 없이 전체 재학습 (수동: train, 또는 모델 캐시 미스)
+      - name: Train without tuning
+        if: |
+          github.event.inputs.mode == 'train' ||
+          (steps.model-cache.outputs.cache-hit != 'true' && github.event.inputs.mode != 'train-tune')
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          MARKET="${{ github.event.inputs.market || 'all' }}"
+          python scripts/train_lgbm.py --market "$MARKET"
+
+      # 모델 있으면 예측만 (매일 기본 스케줄)
       - name: Predict only (매일 기본)
-        if: steps.model-cache.outputs.cache-hit == 'true' && github.event.inputs.mode != 'train'
+        if: |
+          steps.model-cache.outputs.cache-hit == 'true' &&
+          (github.event.inputs.mode == 'predict-only' || github.event_name == 'schedule')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

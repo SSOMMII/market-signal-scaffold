@@ -77,12 +77,21 @@ def ensure_market_master(client: Client, symbol: str) -> int:
     # 심볼 패턴으로 market_type / asset_type 추론
     market_type = "US"
     asset_type = "INDEX"
+
     if symbol.startswith("^KS"):
         market_type, asset_type = "KR", "INDEX"
     elif symbol.endswith("=F"):
         asset_type = "FUTURE"
     elif symbol.endswith("=X"):
         asset_type = "FX"
+    elif symbol.endswith(".KS"):
+        market_type = "KR"
+        const_kr_etf = {
+            '069500.KS', '229200.KS', '360750.KS', '305720.KS', '114800.KS'
+        }
+        asset_type = "STOCK"
+        if symbol in const_kr_etf:
+            asset_type = "ETF"
     elif symbol in ("QQQ", "SPY", "IWM", "GLD", "TLT", "SOXL", "TQQQ"):
         asset_type = "ETF"
 
@@ -120,11 +129,16 @@ def upsert_yfinance(client: Client, payload: dict) -> None:
             "volume": r.get("volume"),
         }
         # 기술적 지표 컬럼 (pandas_ta로 계산된 경우에만 포함)
+        # numeric(8,4) 컬럼: 절대값 9999 초과 시 None으로 처리 (KRW 종목 overflow 방지)
+        _BOUNDED = {"macd", "signal_line"}  # numeric(8,4) — KRW 종목에서 초과 가능
         for col in ("rsi", "macd", "signal_line", "sma_50", "sma_120", "sma_200",
                     "bollinger_upper", "bollinger_middle", "bollinger_lower",
                     "stoch_k", "stoch_d"):
-            if r.get(col) is not None:
-                row[col] = r[col]
+            val = r.get(col)
+            if val is not None:
+                if col in _BOUNDED and abs(float(val)) >= 9999:
+                    val = None  # overflow 방지
+                row[col] = val
         rows.append(row)
 
     # 배치 100건씩
@@ -226,6 +240,11 @@ def main() -> None:
         required=True,
         help="입력 데이터 종류",
     )
+    parser.add_argument(
+        "--input", "-i",
+        default=None,
+        help="JSON 입력 파일 경로 (생략 시 stdin). PowerShell 환경에서 파이프 대신 사용",
+    )
     args = parser.parse_args()
 
     client = get_client()
@@ -234,9 +253,18 @@ def main() -> None:
         upsert_snapshot_only(client)
         return
 
-    raw = sys.stdin.read().strip()
+    # --input 파일 지정 시 파일에서 읽기, 아니면 stdin
+    if args.input:
+        try:
+            raw = Path(args.input).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            print(f"ERROR: 파일을 찾을 수 없습니다: {args.input}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        raw = sys.stdin.read().strip()
+
     if not raw:
-        print("ERROR: stdin에 JSON 데이터가 없습니다.", file=sys.stderr)
+        print("ERROR: JSON 데이터가 없습니다. --input 파일을 지정하거나 stdin으로 전달하세요.", file=sys.stderr)
         sys.exit(1)
 
     try:

@@ -202,3 +202,53 @@ export async function upsertAiPrediction(row: {
     .upsert(row, { onConflict: 'ticker,date' })
   if (error) throw error
 }
+
+// ── signal_history ───────────────────────────────────────────────────
+// 예측 시점에 predicted_score 저장, 이후 actual_return은 cron이 채움
+
+export async function getSignalHistory(etfCode: string, limit = 30) {
+  const { data, error } = await supabase
+    .from('signal_history')
+    .select('*')
+    .eq('etf_code', etfCode)
+    .order('as_of_date', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return data ?? []
+}
+
+export async function getSignalHistoryAll(limit = 100) {
+  const { data, error } = await supabase
+    .from('signal_history')
+    .select('*')
+    .order('as_of_date', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return data ?? []
+}
+
+export async function upsertSignalHistory(row: {
+  etf_code: string
+  as_of_date: string
+  signal: 'STRONG BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG SELL'
+  predicted_score?: number
+  actual_return?: number
+}) {
+  const { error } = await supabase
+    .from('signal_history')
+    .upsert(row, { onConflict: 'etf_code,as_of_date' })
+  if (error) throw error
+}
+
+export async function updateSignalHistoryActualReturn(
+  etfCode: string,
+  asOfDate: string,
+  actualReturn: number,
+) {
+  const { error } = await supabase
+    .from('signal_history')
+    .update({ actual_return: actualReturn })
+    .eq('etf_code', etfCode)
+    .eq('as_of_date', asOfDate)
+  if (error) throw error
+}

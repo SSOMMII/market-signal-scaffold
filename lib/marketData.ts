@@ -12,8 +12,10 @@ export interface SignalItem {
   ticker: string
   name: string
   change: string
-  score: string
+  score: number        // number로 변경
   action: string
+  confidence: number | null  // 신뢰도 추가
+  signalStrength: string  // 신호 강도 추가
   up: boolean
 }
 
@@ -101,10 +103,10 @@ export const krData: MarketData = {
     { name: 'DOW',     value: '38,905', change: '+0.23%', up: true },
   ],
   signals: [
-    { ticker: '360750', name: 'TIGER 미국S&P500', change: '+1.8%', score: '+2.4', action: '매수', up: true  },
-    { ticker: '305720', name: 'KODEX 반도체',     change: '+2.3%', score: '+3.1', action: '매수', up: true  },
-    { ticker: '114800', name: 'KODEX 인버스',     change: '-0.9%', score: '-1.7', action: '관망', up: false },
-    { ticker: '229200', name: 'KODEX 코스닥150',  change: '+1.1%', score: '+1.5', action: '매수', up: true  },
+    { ticker: '360750', name: 'TIGER 미국S&P500', change: '+1.8%', score: 72, confidence: 0.58, signalStrength: '📈 매수', action: '매수', up: true  },
+    { ticker: '305720', name: 'KODEX 반도체',     change: '+2.3%', score: 78, confidence: 0.62, signalStrength: '🚀 강한 매수', action: '매수', up: true  },
+    { ticker: '114800', name: 'KODEX 인버스',     change: '-0.9%', score: 38, confidence: 0.35, signalStrength: '➡️ 관망', action: '관망', up: false },
+    { ticker: '229200', name: 'KODEX 코스닥150',  change: '+1.1%', score: 65, confidence: 0.54, signalStrength: '📈 매수', action: '매수', up: true  },
   ],
   indicators: [
     { label: 'RSI (14)',   value: '42.5',  sub: '중립 구간',   badge: '중립', cls: 'badge-hold' },
@@ -164,10 +166,10 @@ export const usData: MarketData = {
     { name: 'DAX',    value: '18,492', change: '-0.12%', up: false },
   ],
   signals: [
-    { ticker: 'SPY',  name: 'SPDR S&P 500 ETF',    change: '+0.8%',  score: '+1.9', action: '매수', up: true  },
-    { ticker: 'QQQ',  name: 'Invesco QQQ Trust',    change: '+1.2%',  score: '+2.8', action: '매수', up: true  },
-    { ticker: 'SOXS', name: 'Direxion Semi Bear 3X', change: '-2.1%', score: '-2.5', action: '관망', up: false },
-    { ticker: 'ARKK', name: 'ARK Innovation ETF',   change: '+1.7%',  score: '+1.4', action: '매수', up: true  },
+    { ticker: 'SPY',  name: 'SPDR S&P 500 ETF',    change: '+0.8%',  score: 62, action: '매수', up: true,  confidence: 0.45, signalStrength: '📈 매수' },
+    { ticker: 'QQQ',  name: 'Invesco QQQ Trust',    change: '+1.2%',  score: 68, action: '매수', up: true,  confidence: 0.52, signalStrength: '📈 매수' },
+    { ticker: 'SOXS', name: 'Direxion Semi Bear 3X', change: '-2.1%', score: 48, action: '관망', up: false, confidence: 0.38, signalStrength: '➡️ 관망' },
+    { ticker: 'ARKK', name: 'ARK Innovation ETF',   change: '+1.7%',  score: 64, action: '매수', up: true,  confidence: 0.41, signalStrength: '📈 매수' },
   ],
   indicators: [
     { label: 'RSI (14)',   value: '58.2',  sub: '중립 구간',   badge: '중립', cls: 'badge-hold' },

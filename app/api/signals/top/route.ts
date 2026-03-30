@@ -43,9 +43,13 @@ const AI_WEIGHT   = 0.6
 const CONFIDENCE_THRESHOLD_SELL = 0.40
 const CONFIDENCE_THRESHOLD_BUY = 0.60
 
+/** 기술적 스코어(-4.5 ~ +4.5)를 0-100으로 정규화 */
+function normalizeTechScore(score: number): number {
+  return Math.round((score + 4.5) / 9.0 * 100)
+}
+
 /**
  * RSI / MACD / SMA / Stochastic 기반 기술적 스코어 계산
- * 범위: -4.5 ~ +4.5
  */
 function calcTechScore(row: Record<string, any>): number {
   let score = 0
@@ -78,14 +82,8 @@ function calcTechScore(row: Record<string, any>): number {
   return Math.round(score * 10) / 10
 }
 
-/** 기술적 스코어(-4.5 ~ +4.5)를 0-100으로 정규화 */
-function normalizeTechScore(score: number): number {
-  return Math.round((score + 4.5) / 9.0 * 100)
-}
-
 /**
  * 하이브리드 스코어(0-100) → 액션 변환
- * AI 스코어 기준: 60 이상=매수, 40 이하=매도
  */
 function hybridScoreToAction(hybridScore: number): '매수' | '매도' | '관망' {
   if (hybridScore >= 60) return '매수'
@@ -95,34 +93,26 @@ function hybridScoreToAction(hybridScore: number): '매수' | '매도' | '관망
 
 /**
  * Confidence 기반 액션 필터링
- * - 매수 신호: confidence < 0.60 → 신뢰도 부족, 관망으로 다운그레이드
- * - 매도 신호: confidence < 0.60 → 신뢰도 부족, 관망으로 다운그레이드
- * (두 경우 모두 대칭: 신뢰도 >= 0.60일 때만 강한 신호 유지)
  */
 function applyConfidenceFilter(action: '매수' | '매도' | '관망', lgbm_prob: number | null): '매수' | '매도' | '관망' {
-  if (lgbm_prob === null) return action  // AI 데이터 없으면 기존 액션 유지
+  if (lgbm_prob === null) return action
 
+  // 신뢰도 0.60 이상일 때만 강한 신호 유지
   if ((action === '매수' || action === '매도') && lgbm_prob < 0.60) {
     return '관망'
   }
-
+  
   return action
 }
 
 /**
  * 하이브리드 스코어 + Confidence → 신호 강도 분류 (5분류)
- * - STRONG_BUY: score >= 75 + 높은 신뢰도 (또는 AI 신호 명확)
- * - BUY: score >= 60
- * - HOLD: 40 <= score < 60
- * - SELL: 20 <= score < 40
- * - STRONG_SELL: score < 20 + 높은 신뢰도
  */
 function getSignalStrength(
   score: number,
   confidence: number | null,
   aiLabel: string | null
 ): '🚀 강한 매수' | '📈 매수' | '➡️ 관망' | '📉 매도' | '🔴 강한 매도' {
-  // AI 신호가 명확하고 신뢰도가 높으면 강도 상향
   const hasHighConfidence = confidence !== null && confidence >= 0.60
   const hasAILabel = aiLabel && ['STRONG_BUY', 'STRONG_SELL'].includes(aiLabel)
 
@@ -163,7 +153,7 @@ async function fetchSignals(meta: Record<string, string>) {
     ids.push(m.id)
   }
 
-  // 2. 기술적 지표 조회 (최신 2행 per ticker)
+  // 2. 기술적 지표 조회
   const { data: rows, error: rErr } = await supabase
     .from('daily_indicators')
     .select('market_master_id, as_of_date, close, rsi, macd, signal_line, sma_50, sma_200, stoch_k')
@@ -174,17 +164,15 @@ async function fetchSignals(meta: Record<string, string>) {
   if (rErr) throw rErr
 
   // 3. AI 예측값 조회 (ticker별 calibration 방식별 최신 1행)
-  // Calibration: Platt Scaling / ISO Regression / Beta Calibration
   const { data: aiRows, error: aiErr } = await supabase
     .from('ai_predictions')
     .select('ticker, date, signal_score, signal_label, lgbm_prob, breakdown, calibration_method')
     .in('ticker', symbols)
     .order('date', { ascending: false })
-    .limit(symbols.length * 6)  // calibration 방식별 각각 조회
+    .limit(symbols.length * 6)
 
   if (aiErr) console.error('ai_predictions fetch error:', aiErr)
 
-  // ticker별 calibration 방식별 최신 AI 예측 추출
   interface AIPredictor {
     signal_score: number
     signal_label: string
@@ -198,7 +186,6 @@ async function fetchSignals(meta: Record<string, string>) {
     if (!aiByTickerAndCalibration[ai.ticker]) {
       aiByTickerAndCalibration[ai.ticker] = {}
     }
-    // 각 calibration 방식별로 최신 1행만 유지
     const method = ai.calibration_method ?? 'platt'
     if (!aiByTickerAndCalibration[ai.ticker][method]) {
       aiByTickerAndCalibration[ai.ticker][method] = {
@@ -211,10 +198,8 @@ async function fetchSignals(meta: Record<string, string>) {
     }
   }
   
-  // 하위 호환성: aiByTicker에도 유지 (기본: Platt Scaling 사용)
   const aiByTicker: Record<string, AIPredictor> = {}
   for (const ticker in aiByTickerAndCalibration) {
-    // 기본적으로 platt 사용, 없으면 iso, 그 다음 beta
     aiByTicker[ticker] = aiByTickerAndCalibration[ticker]['platt_scaling'] 
       || aiByTickerAndCalibration[ticker]['iso_regression'] 
       || aiByTickerAndCalibration[ticker]['beta_calibration']
@@ -228,7 +213,7 @@ async function fetchSignals(meta: Record<string, string>) {
     if (grouped[row.market_master_id].length < 2) grouped[row.market_master_id].push(row)
   }
 
-  // 5. 하이브리드 스코어 계산 및 결과 조합 (A/B 테스트)
+  // 5. 하이브리드 스코어 계산 및 결과 조합
   const results = []
   for (const [idStr, pair] of Object.entries(grouped)) {
     const id     = Number(idStr)
@@ -291,12 +276,10 @@ async function fetchSignals(meta: Record<string, string>) {
       confidence  = ai.lgbm_prob
       hybridScore = Math.round(TECH_WEIGHT * techNorm + AI_WEIGHT * ai.signal_score)
     } else {
-      // AI 데이터 없으면 기술적 스코어만 사용
       hybridScore = techNorm
     }
 
     let action = hybridScoreToAction(hybridScore)
-    // Confidence threshold 적용: 신뢰도가 낮으면 관망으로 다운그레이드
     action = applyConfidenceFilter(action, confidence)
 
     // 신호 강도 계산
@@ -309,7 +292,6 @@ async function fetchSignals(meta: Record<string, string>) {
       changeStr = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%'
     }
 
-    // Calibration 별 응답 구조
     results.push({
       ticker:         symbol,
       name:           meta[symbol] ?? symbol,
@@ -324,7 +306,7 @@ async function fetchSignals(meta: Record<string, string>) {
       up:             changePct >= 0,
       hasAI:          !!ai,
       
-      // Calibration 방식별 점수 (실험용)
+      // Calibration 방식별 점수
       calibrations: {
         platt: plattScore !== null ? {
           score: plattScore,
@@ -349,12 +331,29 @@ async function fetchSignals(meta: Record<string, string>) {
   return results
 }
 
+/**
+ * /api/signals/top?market=us&limit=5
+ * 상위 N개 종목 반환 (점수 기준 정렬)
+ */
 export async function GET(req: NextRequest) {
   try {
     const market = req.nextUrl.searchParams.get('market') ?? 'us'
+    const limitStr = req.nextUrl.searchParams.get('limit') ?? '10'
+    const limit = Math.min(Math.max(Number(limitStr), 1), 50) // 1~50 범위
+
     const meta = market === 'kr' ? KR_META : US_ETF_META
-    const data = await fetchSignals(meta)
-    return NextResponse.json({ data })
+    const allSignals = await fetchSignals(meta)
+    
+    // 상위 limit개 반환
+    const topSignals = allSignals.slice(0, limit)
+
+    return NextResponse.json({
+      market,
+      total: allSignals.length,
+      limit,
+      count: topSignals.length,
+      data: topSignals,
+    })
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
   }

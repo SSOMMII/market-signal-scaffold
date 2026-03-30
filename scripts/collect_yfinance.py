@@ -4,6 +4,7 @@ yfinance 기반 미국 ETF/주식/선물/환율 데이터 수집기
 - Reuters API 대체
 - API 키 없이 Yahoo Finance 기반으로 OHLCV, 배당, 섹터 정보 수집 가능
 - 출력: JSON (Supabase daily_indicators 및 global_indicators 테이블 upsert용)
+- 한국 지수(^KS11, ^KQ11) OHLC: pykrx 우선 사용 (yfinance는 OHLC null 반환)
 
 Usage:
     python collect_yfinance.py            # 최근 5일치
@@ -30,13 +31,31 @@ except ImportError:
     _HAS_TA = False
     print("[WARN] ta 미설치 → 기술적 지표 계산 생략. 설치: pip install ta", file=sys.stderr)
 
+# pykrx: 한국 지수 OHLC 전용 (yfinance는 ^KS11/^KQ11 OHLC를 null로 반환)
+try:
+    from pykrx import stock as _pykrx
+    _HAS_PYKRX = True
+except ImportError:
+    _HAS_PYKRX = False
+    print("[WARN] pykrx 미설치 → 한국 지수 OHLC 수집 생략. 설치: pip install pykrx", file=sys.stderr)
+
+# pykrx 지수 코드 매핑 (yfinance 심볼 → pykrx 코드)
+_PYKRX_INDEX_MAP = {
+    '^KS11': '1001',   # KOSPI
+    '^KQ11': '2001',   # KOSDAQ
+}
+
 # 수집 대상 종목 목록
 TARGETS = {
-    'ETF': ['QQQ', 'SPY', 'IWM', 'GLD', 'TLT', 'SOXL', 'TQQQ'],
-    'INDEX': ['^GSPC', '^IXIC', '^DJI', '^VIX', '^KS11', '^KQ11'],  # KOSDAQ 추가
-    'FUTURES': ['NQ=F', 'ES=F', 'YM=F'],
-    'FX': ['USDKRW=X', 'EURUSD=X', 'JPY=X'],
-    'COMMODITY': ['GC=F', 'CL=F'],
+    'ETF':      ['QQQ', 'SPY', 'IWM', 'GLD', 'TLT', 'SOXL', 'TQQQ'],
+    'INDEX':    ['^GSPC', '^IXIC', '^DJI', '^VIX', '^KS11', '^KQ11'],
+    'FUTURES':  ['NQ=F', 'ES=F', 'YM=F'],
+    'FX':       ['USDKRW=X', 'EURUSD=X', 'JPY=X'],
+    'COMMODITY':['GC=F', 'CL=F'],
+    # 국내 ETF (KODEX/TIGER 대표 ETF)
+    'KR_ETF':   ['069500.KS', '229200.KS', '360750.KS', '305720.KS', '114800.KS'],
+    # 국내 개별주 (대형주 5종)
+    'KR_STOCK': ['005930.KS', '000660.KS', '035420.KS', '035720.KS', '005380.KS'],
 }
 
 # 지표 계산에 필요한 최소 데이터 기간 (SMA200 기준)
@@ -113,13 +132,64 @@ def _row_to_record(symbol: str, ts, row) -> dict:
     }
 
 
+def _collect_kr_index_ohlcv_pykrx(symbol: str, start_date: str, end_date: str) -> list[dict]:
+    """pykrx로 한국 지수(KOSPI/KOSDAQ) OHLCV 수집 — yfinance OHLC null 보완"""
+    if not _HAS_PYKRX:
+        return []
+    idx_code = _PYKRX_INDEX_MAP.get(symbol)
+    if not idx_code:
+        return []
+    try:
+        fmt_start = start_date.replace('-', '')
+        fmt_end   = end_date.replace('-', '')
+        df = _pykrx.get_index_ohlcv_by_date(fmt_start, fmt_end, idx_code)
+        if df is None or df.empty:
+            return []
+        records = []
+        for ts, row in df.iterrows():
+            records.append({
+                'symbol': symbol,
+                'date':   str(ts.date()),
+                'open':   _safe_float(row.get('시가')),
+                'high':   _safe_float(row.get('고가')),
+                'low':    _safe_float(row.get('저가')),
+                'close':  _safe_float(row.get('종가')),
+                'volume': _safe_int(row.get('거래량')),
+                'rsi': None, 'macd': None, 'signal_line': None,
+                'sma_50': None, 'sma_120': None, 'sma_200': None,
+                'bollinger_upper': None, 'bollinger_middle': None, 'bollinger_lower': None,
+                'stoch_k': None, 'stoch_d': None,
+            })
+        print(f"[pykrx] {symbol}: {len(records)}건 수집", file=sys.stderr)
+        return records
+    except Exception as e:
+        print(f"[WARN] pykrx {symbol}: {e}", file=sys.stderr)
+        return []
+
+
 def collect_ohlcv(period: str = '5d') -> list[dict]:
     """기간(period) 기반 수집 — 지표 계산을 위해 내부적으로 1년치 데이터 사용"""
     results = []
     all_symbols = [s for group in TARGETS.values() for s in group]
     req_rows = _period_to_rows(period)
 
+    # 한국 지수는 pykrx로 우선 수집
+    kr_index_symbols = set(_PYKRX_INDEX_MAP.keys())
+    kr_collected: set[str] = set()
+    if _HAS_PYKRX:
+        today_str = date.today().isoformat()
+        days_back = req_rows + 10  # 거래일 기준 여유분
+        start_str = (date.today() - timedelta(days=days_back)).isoformat()
+        for sym in kr_index_symbols:
+            rows = _collect_kr_index_ohlcv_pykrx(sym, start_str, today_str)
+            if rows:
+                results.extend(rows[-req_rows:])
+                kr_collected.add(sym)
+
     for symbol in all_symbols:
+        # pykrx로 이미 수집한 한국 지수는 yfinance 중복 수집 스킵
+        if symbol in kr_collected:
+            continue
         try:
             ticker = yf.Ticker(symbol)
             # 지표 계산용으로 항상 1년치 fetch
@@ -142,14 +212,26 @@ def collect_ohlcv(period: str = '5d') -> list[dict]:
 
 def collect_by_date(start_date: str, end_date: str) -> list[dict]:
     """날짜 범위 기반 수집 (YYYY-MM-DD 형식)"""
+    from datetime import datetime, date as _date
     results = []
     all_symbols = [s for group in TARGETS.values() for s in group]
 
+    # 한국 지수는 pykrx로 우선 수집
+    kr_index_symbols = set(_PYKRX_INDEX_MAP.keys())
+    kr_collected: set[str] = set()
+    if _HAS_PYKRX:
+        for sym in kr_index_symbols:
+            rows = _collect_kr_index_ohlcv_pykrx(sym, start_date, end_date)
+            if rows:
+                results.extend(rows)
+                kr_collected.add(sym)
+
     # 지표 계산용 fetch start (300 캘린더일 앞)
-    from datetime import datetime
     fetch_start = (datetime.strptime(start_date, '%Y-%m-%d') - timedelta(days=300)).strftime('%Y-%m-%d')
 
     for symbol in all_symbols:
+        if symbol in kr_collected:
+            continue
         try:
             ticker = yf.Ticker(symbol)
             hist = ticker.history(start=fetch_start, end=end_date, auto_adjust=True)
@@ -159,7 +241,6 @@ def collect_by_date(start_date: str, end_date: str) -> list[dict]:
             hist = _compute_indicators(hist)
 
             # 요청된 날짜 범위만 반환 (타임존 무관하게 date 레벨 비교)
-            from datetime import date as _date
             start_d = _date.fromisoformat(start_date)
             hist_sliced = hist[[d.date() >= start_d for d in hist.index]]
             for ts, row in hist_sliced.iterrows():

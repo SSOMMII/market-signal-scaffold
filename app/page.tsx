@@ -69,6 +69,21 @@ type GlobalSnap = {
   as_of:   string
 }
 
+type RealSignalItem = {
+  ticker: string
+  name: string
+  change: string
+  score: number        // 하이브리드 0-100
+  techScore: number
+  aiScore: number | null
+  aiLabel: string | null
+  confidence: number | null  // LightGBM 신뢰도 (0-1)
+  action: string
+  signalStrength: string  // 5분류 (이모지 포함)
+  up: boolean
+  hasAI: boolean
+}
+
 export default function DashboardPage() {
   const { market } = useMarket()
   const d = market === 'kr' ? krData : usData
@@ -78,7 +93,8 @@ export default function DashboardPage() {
   const [globalSnap, setGlobalSnap] = useState<GlobalSnap | null>(null)
   const [activeRows, setActiveRows] = useState<Record<string, any>[]>([])
   const [index2Rows, setIndex2Rows] = useState<Record<string, any>[]>([])
-  const [realSignals, setRealSignals] = useState<typeof d.signals | null>(null)
+  const [realSignals, setRealSignals] = useState<RealSignalItem[] | null>(null)
+  const [foreignFlow, setForeignFlow] = useState<{ net_buy_str: string } | null>(null)
 
   useEffect(() => {
     fetch('/api/global-indicators')
@@ -112,6 +128,15 @@ export default function DashboardPage() {
       .catch(() => {})
   }, [isKr])
 
+  useEffect(() => {
+    if (!isKr) return
+    setForeignFlow(null)
+    fetch('/api/foreign-flow?market=KRX')
+      .then(r => r.json())
+      .then(({ data }) => { if (data) setForeignFlow(data) })
+      .catch(() => {})
+  }, [isKr])
+
   // ── 실제 데이터 → UI 포맷 변환 ─────────────────────────────────────
   const latestRow = activeRows[0]
   const closeArr = [...activeRows].reverse().map(r => Number(r.close)).filter(Boolean)
@@ -134,6 +159,35 @@ export default function DashboardPage() {
   // RSI 등 지표가 실제 계산된 경우만 사용 (null이면 mock 유지)
   const realIndicators: IndicatorItem[] | null =
     latestRow?.rsi != null ? buildIndicators(latestRow) : null
+
+  // ── Day Insight 실데이터 계산 ────────────────────────────────────────
+  const avgScore = realSignals?.length
+    ? realSignals.reduce((s, r) => s + r.score, 0) / realSignals.length
+    : null
+
+  const realInsightDir: string | null = avgScore != null
+    ? avgScore >= 60 ? '상승 예상' : avgScore <= 40 ? '하락 예상' : '보합 예상'
+    : null
+
+  const realInsightConf: number | null = avgScore != null ? Math.round(avgScore) : null
+
+  // KOSPI 일간 등락률
+  const kospiChangePct = latestRow?.close && activeRows[1]?.close
+    ? (latestRow.close - activeRows[1].close) / activeRows[1].close * 100
+    : null
+
+  const realInsightStats: { label: string; value: string }[] | null =
+    isKr && globalSnap ? [
+      { label: '코스피', value: kospiChangePct != null ? fmtPct(kospiChangePct) : '-' },
+      { label: '외국인', value: foreignFlow?.net_buy_str ?? '-' },
+      { label: '환율',   value: globalSnap.usd_krw.value != null ? `${fmt0(globalSnap.usd_krw.value)}원` : '-' },
+    ]
+    : !isKr && globalSnap ? [
+      { label: 'S&P 500', value: fmtPct(globalSnap.sp500.change) },
+      { label: 'NASDAQ',  value: fmtPct(globalSnap.nasdaq.change) },
+      { label: 'VIX',     value: globalSnap.vix.value != null ? fmt2(globalSnap.vix.value) : '-' },
+    ]
+    : null
 
   const index2Latest = index2Rows[0]
   const index2CloseArr = [...index2Rows].reverse().map(r => Number(r.close)).filter(Boolean)
@@ -256,21 +310,27 @@ export default function DashboardPage() {
             </div>
             <div className="px-5 py-4 space-y-4">
               <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 rounded-full px-4 py-2 bg-emerald-50 text-emerald-600 font-semibold text-sm">
-                  <TrendingUpIcon size={18} />
-                  {d.insightDir}
+                <div className={`flex items-center gap-2 rounded-full px-4 py-2 font-semibold text-sm ${
+                  (realInsightDir ?? d.insightDir).includes('상승') ? 'bg-emerald-50 text-emerald-600'
+                  : (realInsightDir ?? d.insightDir).includes('하락') ? 'bg-red-50 text-red-500'
+                  : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {(realInsightDir ?? d.insightDir).includes('하락')
+                    ? <TrendingDownIcon size={18} />
+                    : <TrendingUpIcon size={18} />}
+                  {realInsightDir ?? d.insightDir}
                 </div>
                 <div className="flex items-center gap-2 flex-1">
                   <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
                     <div className={`h-full rounded-full transition-all duration-700 ${isKr ? 'bg-indigo-500' : 'bg-violet-500'}`}
-                      style={{ width: `${d.insightConf}%` }} />
+                      style={{ width: `${realInsightConf ?? d.insightConf}%` }} />
                   </div>
-                  <span className="text-sm font-bold text-slate-600 shrink-0">{d.insightConf}%</span>
+                  <span className="text-sm font-bold text-slate-600 shrink-0">{realInsightConf ?? d.insightConf}%</span>
                 </div>
               </div>
               <p className="text-sm text-slate-500 leading-relaxed">{d.insightText}</p>
               <div className="grid grid-cols-3 gap-3">
-                {d.insightStats.map(({ label, value }) => (
+                {(realInsightStats ?? d.insightStats).map(({ label, value }) => (
                   <div key={label} className="rounded-xl bg-slate-50 p-3 text-center">
                     <p className="text-xs text-slate-400">{label}</p>
                     <p className="mt-1 text-sm font-bold text-emerald-600">{value}</p>
@@ -312,7 +372,7 @@ export default function DashboardPage() {
                   {idx.ohlc.map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-slate-50 p-2">
                       <p className="text-[10px] text-slate-400">{k}</p>
-                      <p className="text-xs font-semibold text-slate-700">{v}</p>
+                      <p className={`text-xs font-semibold ${v === '-' ? 'text-slate-300' : 'text-slate-700'}`}>{v === '-' ? '―' : v}</p>
                     </div>
                   ))}
                 </div>
@@ -395,29 +455,58 @@ export default function DashboardPage() {
               </Link>
             </div>
             <div className="p-4 space-y-2">
-              {(realSignals ?? d.signals).map(({ ticker, name, change, score, action, up }) => (
-                <div key={ticker}
-                  className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-3 hover:bg-slate-100 transition-colors cursor-pointer">
-                  <div className="flex items-center gap-2.5">
-                    <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${up ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
-                      {up ? <TrendingUpIcon size={14} /> : <TrendingDownIcon size={14} />}
+              {(realSignals ?? d.signals).map(({ ticker, name, change, score, action, confidence, signalStrength, up }) => {
+                const strengthColor = signalStrength?.includes('강한 매수') ? 'bg-emerald-100 text-emerald-700'
+                  : signalStrength?.includes('매수') ? 'bg-emerald-50 text-emerald-600'
+                  : signalStrength?.includes('관망') ? 'bg-slate-100 text-slate-600'
+                  : signalStrength?.includes('매도') && signalStrength?.includes('강한') ? 'bg-red-100 text-red-700'
+                  : signalStrength?.includes('매도') ? 'bg-red-50 text-red-500'
+                  : 'bg-slate-100 text-slate-600'
+
+                return (
+                  <div key={ticker}
+                    className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-3 hover:bg-slate-100 transition-colors cursor-pointer">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${up ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
+                        {up ? <TrendingUpIcon size={14} /> : <TrendingDownIcon size={14} />}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900 leading-tight">{name}</p>
+                        <p className="text-[10px] text-slate-400">{ticker}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900 leading-tight">{name}</p>
-                      <p className="text-[10px] text-slate-400">{ticker}</p>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        <p className={`text-sm font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{change}</p>
+                        <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5">
+                          <span>Score: {score}</span>
+                          {confidence !== null && (
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                              confidence >= 0.60 ? 'bg-emerald-100 text-emerald-700'
+                              : confidence >= 0.40 ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-200 text-slate-600'
+                            }`}>
+                              Conf: {(confidence * 100).toFixed(0)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                          action === '매수' ? 'bg-emerald-50 text-emerald-600'
+                          : action === '매도' ? 'bg-red-50 text-red-500'
+                          : 'bg-slate-200 text-slate-500'
+                        }`}>
+                          {action}
+                        </span>
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-center ${strengthColor}`}>
+                          {signalStrength || '➡️ 관망'}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="text-right">
-                      <p className={`text-sm font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{change}</p>
-                      <p className="text-[10px] text-slate-400">Score: {score}</p>
-                    </div>
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${action === '매수' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'}`}>
-                      {action}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 

@@ -52,26 +52,6 @@ CREATE TABLE IF NOT EXISTS daily_indicators (
   UNIQUE (market_master_id, as_of_date)
 );
 
--- ai_signals: AI 예측 신호 출력
-CREATE TABLE IF NOT EXISTS ai_signals (
-  id serial PRIMARY KEY,
-  market_master_id integer NOT NULL REFERENCES market_master(id) ON DELETE CASCADE,
-  as_of_date date NOT NULL,
-  source text NOT NULL CHECK (source IN ('NIGHT', 'DAY', 'AUTO', 'BACKTEST')),
-  tech_score numeric(5,2) NOT NULL,
-  global_score numeric(5,2) NOT NULL,
-  futures_score numeric(5,2) NOT NULL,
-  fx_score numeric(5,2) NOT NULL,
-  supply_score numeric(5,2) NOT NULL,
-  total_score numeric(6,2) GENERATED ALWAYS AS ((tech_score*0.3 + global_score*0.3 + futures_score*0.2 + fx_score*0.1 + supply_score*0.1)) STORED,
-  signal text NOT NULL CHECK (signal IN ('STRONG BUY','BUY','HOLD','SELL','STRONG SELL')),
-  confidence numeric(5,2) NOT NULL,
-  commentary text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (market_master_id, as_of_date, source)
-);
-
 -- user_alerts: 사용자 알림 설정
 CREATE TABLE IF NOT EXISTS user_alerts (
   id serial PRIMARY KEY,
@@ -185,7 +165,6 @@ CREATE TABLE IF NOT EXISTS ai_predictions (
 -- 3) Indexes
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_daily_indicators_market_date ON daily_indicators(market_master_id, as_of_date);
-CREATE INDEX IF NOT EXISTS idx_ai_signals_market_date ON ai_signals(market_master_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_global_indicators_ts ON global_indicators(as_of_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_user_alerts_user ON user_alerts(user_id);
 
@@ -336,8 +315,29 @@ INSERT INTO market_master (symbol, name, market_type, asset_type, currency) VALU
 ('GLD',   'SPDR Gold Shares',          'US', 'ETF', 'USD'),
 ('TLT',   'iShares 20+ Year Treasury', 'US', 'ETF', 'USD'),
 ('ARKK',  'ARK Innovation ETF',        'US', 'ETF', 'USD'),
-('SOXL',  'Direxion Semicon Bull 3X',  'US', 'ETF', 'USD')
+('SOXL',  'Direxion Semicon Bull 3X',  'US', 'ETF', 'USD'),
+
+-- 국내 ETF 추가
+('069500.KS', 'KODEX 200',              'KR', 'ETF', 'KRW'),
+('229200.KS', 'KODEX KOSDAQ150',        'KR', 'ETF', 'KRW'),
+('360750.KS', 'TIGER 미국 S&P500',      'KR', 'ETF', 'KRW'),
+('305720.KS', 'KODEX 반도체',           'KR', 'ETF', 'KRW'),
+('114800.KS', 'TIGER 200선물인버스2X',  'KR', 'ETF', 'KRW')
 
 ON CONFLICT (symbol) DO UPDATE SET
   name       = EXCLUDED.name,
+  updated_at = now();
+
+-- ETF 매핑 (etf_mapping 테이블에 관계 지수/민감도 채우기)
+INSERT INTO etf_mapping (etf_code, related_index, sensitivity, description)
+VALUES
+  ('069500.KS', 'KOSPI', 1.00, 'KODEX 200'),
+  ('229200.KS', 'KOSDAQ', 1.00, 'KODEX KOSDAQ150'),
+  ('360750.KS', 'S&P 500', 0.95, 'TIGER 미국 S&P500'),
+  ('305720.KS', 'KOSPI 반도체', 1.10, 'KODEX 반도체'),
+  ('114800.KS', 'KOSPI', 1.00, 'TIGER 200선물인버스2X')
+ON CONFLICT (etf_code) DO UPDATE SET
+  related_index = EXCLUDED.related_index,
+  sensitivity = EXCLUDED.sensitivity,
+  description = EXCLUDED.description,
   updated_at = now();
