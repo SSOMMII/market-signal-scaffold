@@ -942,13 +942,17 @@ def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_ver
             print(f"\n[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료", file=sys.stderr)
         except Exception as e:
             print(f"[WARN] ai_predictions upsert 실패: {e}", file=sys.stderr)
-            # 모델 버전 정보 제거하고 재시도
+            # DB에 없는 컬럼 제거하고 재시도
             for row in rows_to_upsert:
-                row.pop("model_version", None)
-            client.table("ai_predictions").upsert(
-                rows_to_upsert, on_conflict="ticker,date"
-            ).execute()
-            print(f"[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료 (model_version 제외)", file=sys.stderr)
+                for col in ("model_version", "entry_date", "entry_price"):
+                    row.pop(col, None)
+            try:
+                client.table("ai_predictions").upsert(
+                    rows_to_upsert, on_conflict="ticker,date"
+                ).execute()
+                print(f"[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료 (불필요 컬럼 제외)", file=sys.stderr)
+            except Exception as e2:
+                print(f"[ERROR] ai_predictions upsert 재시도 실패: {e2}", file=sys.stderr)
 
         history_rows = [
             {
@@ -1041,6 +1045,9 @@ def main():
             if spec_item:
                 spec_item["symbols"] = cfg["symbols"]
                 spec_item["market"] = cfg["label"]
+                # predict_and_upsert는 spec["model"]을 참조하므로 model_a를 기본 모델로 설정
+                if "model_a" in spec_item and "model" not in spec_item:
+                    spec_item["model"] = spec_item["model_a"]
                 model_specs.append(spec_item)
 
         if not model_specs:
