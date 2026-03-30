@@ -121,3 +121,104 @@ export async function getKisDailyOhlcv(symbol: string, startDate: string, endDat
   if (!res.ok) throw new Error(`KIS daily OHLCV error ${res.status}`)
   return res.json()
 }
+
+/**
+ * ETF 현재가 시세 조회
+ * 주식과 다르게 FID_COND_MRKT_DIV_CODE = 'E' 사용
+ * @param symbol ETF 코드 (예: '069500' = KODEX 200)
+ */
+export async function getKisEtfPrice(symbol: string) {
+  const token = await getKisToken()
+  const params = new URLSearchParams({
+    FID_COND_MRKT_DIV_CODE: 'E',
+    FID_INPUT_ISCD: symbol,
+  })
+
+  const res = await fetch(
+    `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-price?${params}`,
+    { headers: kisHeaders(token, 'FHPST01010000') }
+  )
+
+  if (!res.ok) throw new Error(`KIS ETF price error ${res.status}`)
+  return res.json()
+}
+
+/**
+ * ETF 일봉 OHLCV 조회
+ * @param symbol ETF 코드 (6자리, .KS 제외)
+ * @param startDate YYYYMMDD
+ * @param endDate YYYYMMDD
+ */
+export async function getKisEtfDailyOhlcv(symbol: string, startDate: string, endDate: string) {
+  const token = await getKisToken()
+  const params = new URLSearchParams({
+    FID_COND_MRKT_DIV_CODE: 'E',
+    FID_INPUT_ISCD: symbol,
+    FID_INPUT_DATE_1: startDate,
+    FID_INPUT_DATE_2: endDate,
+    FID_PERIOD_DIV_CODE: 'D',
+    FID_ORG_ADJ_PRC: '1',
+  })
+
+  const res = await fetch(
+    `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice?${params}`,
+    { headers: kisHeaders(token, 'FHPST01710000') }
+  )
+
+  if (!res.ok) throw new Error(`KIS ETF OHLCV error ${res.status}`)
+  return res.json()
+}
+
+/**
+ * ETF 투자자별 매매 동향 (외국인/기관/개인 순매수)
+ * @param symbol ETF 코드 (6자리)
+ */
+export async function getKisEtfInvestorFlow(symbol: string) {
+  const token = await getKisToken()
+  const params = new URLSearchParams({
+    FID_COND_MRKT_DIV_CODE: 'E',
+    FID_INPUT_ISCD: symbol,
+  })
+
+  const res = await fetch(
+    `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor?${params}`,
+    { headers: kisHeaders(token, 'FHPST01010900') }
+  )
+
+  if (!res.ok) throw new Error(`KIS ETF investor flow error ${res.status}`)
+  return res.json()
+}
+
+/**
+ * market_master의 KR ETF 목록 전체에 대해 KIS 현재가 일괄 조회
+ * @param symbols .KS 포함 심볼 배열 (예: ['069500.KS', '229200.KS'])
+ * @returns symbol → 현재가/수급 데이터 맵
+ */
+export async function getKisEtfPriceBatch(symbols: string[]): Promise<Record<string, any>> {
+  const results: Record<string, any> = {}
+
+  // 병렬 요청 (KIS API rate limit 고려해 5개씩 배치)
+  const BATCH_SIZE = 5
+  const DELAY_MS = 200
+
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE)
+    await Promise.all(
+      batch.map(async (sym) => {
+        const code = sym.replace('.KS', '')
+        try {
+          const data = await getKisEtfPrice(code)
+          results[sym] = data
+        } catch (e) {
+          console.error(`[KIS] ${sym} 조회 실패:`, e)
+          results[sym] = null
+        }
+      })
+    )
+    if (i + BATCH_SIZE < symbols.length) {
+      await new Promise(r => setTimeout(r, DELAY_MS))
+    }
+  }
+
+  return results
+}

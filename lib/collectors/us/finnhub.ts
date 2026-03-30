@@ -82,6 +82,57 @@ export async function getFinnhubMarketNews(
   })
 }
 
+export interface FinnhubBasicFinancials {
+  metric: {
+    peBasicExclExtraTTM?: number   // PER (TTM)
+    pbAnnual?: number              // PBR
+    roeRfy?: number                // ROE (%)
+    roaRfy?: number                // ROA (%)
+    epsNormalizedAnnual?: number   // EPS
+    revenueGrowthTTMYoy?: number   // 매출 성장률 YoY (%)
+    netProfitMarginTTM?: number    // 순이익률 (%)
+    totalDebt_totalEquityAnnual?: number  // 부채비율
+    dividendYieldIndicatedAnnual?: number // 배당수익률 (%)
+    '52WeekHigh'?: number
+    '52WeekLow'?: number
+  }
+}
+
+/**
+ * 종목 재무지표 (PER, PBR, ROE 등) — 미국 종목 전용
+ */
+export async function getFinnhubBasicFinancials(symbol: string): Promise<FinnhubBasicFinancials> {
+  return finnhubGet<FinnhubBasicFinancials>('/stock/metric', { symbol, metric: 'all' })
+}
+
+export interface FinnhubEarningsEvent {
+  date: string        // 'YYYY-MM-DD'
+  symbol: string
+  epsEstimate: number | null
+  epsActual: number | null
+  revenueEstimate: number | null
+  revenueActual: number | null
+}
+
+export interface FinnhubEarningsCalendar {
+  earningsCalendar: FinnhubEarningsEvent[]
+}
+
+/**
+ * 실적 발표 일정 조회 (from ~ to)
+ */
+export async function getFinnhubEarningsCalendar(
+  from: string,  // 'YYYY-MM-DD'
+  to: string,    // 'YYYY-MM-DD'
+  symbol?: string
+): Promise<FinnhubEarningsCalendar> {
+  return finnhubGet<FinnhubEarningsCalendar>('/calendar/earnings', {
+    from,
+    to,
+    ...(symbol ? { symbol } : {}),
+  })
+}
+
 export interface FinnhubCandle {
   c: number[]  // close prices
   h: number[]  // high

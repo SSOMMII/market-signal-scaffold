@@ -86,13 +86,11 @@ def ensure_market_master(client: Client, symbol: str) -> int:
         asset_type = "FX"
     elif symbol.endswith(".KS"):
         market_type = "KR"
-        const_kr_etf = {
-            '069500.KS', '229200.KS', '360750.KS', '305720.KS', '114800.KS'
-        }
+        # market_master에 이미 seed된 ETF는 조회로 확인, 신규 .KS 심볼은 STOCK으로 기본 처리
+        # (seed_market_master.py로 ETF를 먼저 등록하면 get_master_id에서 기존 레코드 반환)
         asset_type = "STOCK"
-        if symbol in const_kr_etf:
-            asset_type = "ETF"
-    elif symbol in ("QQQ", "SPY", "IWM", "GLD", "TLT", "SOXL", "TQQQ"):
+    elif symbol.upper() in {"QQQ", "SPY", "IWM", "GLD", "TLT", "SOXL", "TQQQ",
+                             "VTI", "EFA", "EEM", "XLK", "XLF", "XLE", "ARKK", "SOXX"}:
         asset_type = "ETF"
 
     res = (

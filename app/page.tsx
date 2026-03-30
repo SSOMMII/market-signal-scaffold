@@ -169,7 +169,24 @@ export default function DashboardPage() {
     ? avgScore >= 60 ? '상승 예상' : avgScore <= 40 ? '하락 예상' : '보합 예상'
     : null
 
-  const realInsightConf: number | null = avgScore != null ? Math.round(avgScore) : null
+  // 신호 강도: 방향별로 0~100% 범위로 정규화
+  // · 상승 예상(60~100): 0~100% → (score-60)/40*100
+  // · 하락 예상(0~40):  0~100% → (40-score)/40*100
+  // · 보합 예상(40~60): 중립 거리 기준, 50 근접일수록 높음
+  const realInsightConf: number | null = avgScore != null
+    ? avgScore >= 60
+      ? Math.round((avgScore - 60) / 40 * 100)
+      : avgScore <= 40
+        ? Math.round((40 - avgScore) / 40 * 100)
+        : Math.round((1 - Math.abs(avgScore - 50) / 10) * 100)
+    : null
+
+  // 방향 바 색상
+  const insightBarColor = (realInsightDir ?? d.insightDir).includes('상승')
+    ? 'bg-emerald-500'
+    : (realInsightDir ?? d.insightDir).includes('하락')
+      ? 'bg-red-400'
+      : 'bg-slate-400'
 
   // KOSPI 일간 등락률
   const kospiChangePct = latestRow?.close && activeRows[1]?.close
@@ -320,12 +337,17 @@ export default function DashboardPage() {
                     : <TrendingUpIcon size={18} />}
                   {realInsightDir ?? d.insightDir}
                 </div>
-                <div className="flex items-center gap-2 flex-1">
-                  <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
-                    <div className={`h-full rounded-full transition-all duration-700 ${isKr ? 'bg-indigo-500' : 'bg-violet-500'}`}
+                <div className="flex flex-col gap-1 flex-1">
+                  <div className="relative h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div className="absolute inset-y-0 left-1/2 w-px bg-slate-300 z-10" />
+                    <div className={`h-full rounded-full transition-all duration-700 ${insightBarColor}`}
                       style={{ width: `${realInsightConf ?? d.insightConf}%` }} />
                   </div>
-                  <span className="text-sm font-bold text-slate-600 shrink-0">{realInsightConf ?? d.insightConf}%</span>
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                    <span>약세</span>
+                    <span className="font-semibold text-slate-600">{realInsightConf ?? d.insightConf}%</span>
+                    <span>강세</span>
+                  </div>
                 </div>
               </div>
               <p className="text-sm text-slate-500 leading-relaxed">{d.insightText}</p>

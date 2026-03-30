@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { supabase, getDailyIndicatorsBySymbol } from '@/lib/supabaseClient'
 import { getTodayFearGreed } from '@/lib/collectors/common/fearGreed'
 import { getSymbolMentions } from '@/lib/collectors/us/apeWisdom'
+import { getFinnhubBasicFinancials } from '@/lib/collectors/us/finnhub'
 
 // ── Rule-based AI score from real technical indicators ────────────────────────
 // RSI: 과매도(+) / 과매수(-), MACD: 골든크로스(+) / 데드크로스(-), SMA: 가격 위치
@@ -131,7 +132,98 @@ export async function GET(
       }
     }
 
-    // 5. AI Score 계산
+    // 4-b. 재무지표 (미국 종목: Finnhub / 한국 종목: fundamental_data 기반 계산)
+    type Fundamentals = {
+      per: number | null
+      pbr: number | null
+      roe: number | null
+      eps: number | null
+      revenueGrowth: number | null
+      debtRatio: number | null
+      dividendYield: number | null
+    }
+    let fundamentals: Fundamentals = {
+      per: null, pbr: null, roe: null, eps: null,
+      revenueGrowth: null, debtRatio: null, dividendYield: null,
+    }
+    if (master.market_type === 'US') {
+      try {
+        const fin = await getFinnhubBasicFinancials(symbol)
+        const m = fin.metric ?? {}
+        fundamentals = {
+          per:           m.peBasicExclExtraTTM       ?? null,
+          pbr:           m.pbAnnual                  ?? null,
+          roe:           m.roeRfy                    ?? null,
+          eps:           m.epsNormalizedAnnual        ?? null,
+          revenueGrowth: m.revenueGrowthTTMYoy       ?? null,
+          debtRatio:     m.totalDebt_totalEquityAnnual ?? null,
+          dividendYield: m.dividendYieldIndicatedAnnual ?? null,
+        }
+      } catch {
+        // Finnhub 실패 시 null 유지
+      }
+    } else if (master.market_type === 'KR') {
+      try {
+        // fundamental_data에서 최근 데이터 조회
+        const { data: fundRows } = await supabase
+          .from('fundamental_data')
+          .select('*')
+          .eq('symbol', symbol)
+          .order('year', { ascending: false })
+          .order('quarter', { ascending: false })
+          .limit(1)
+
+        if (fundRows && fundRows.length > 0) {
+          const fund = fundRows[0]
+          const currentPrice = close  // daily_indicators에서 가져온 현재가
+
+          fundamentals.eps = fund.eps ? Number(fund.eps) : null
+
+          // PER = 현재가 / EPS
+          if (currentPrice && fund.eps && fund.eps > 0) {
+            fundamentals.per = currentPrice / fund.eps
+          }
+
+          // PBR = 현재가 / BPS (BPS = 자본총계 / 발행주식수)
+          // 발행주식수 정보가 없으므로 BPS 계산 생략
+
+          // ROE = 당기순이익 / 자본총계
+          if (fund.net_income && fund.total_equity && fund.total_equity > 0) {
+            fundamentals.roe = (fund.net_income / fund.total_equity) * 100
+          }
+
+          // 부채비율 = 총부채 / 자본총계
+          if (fund.total_assets && fund.total_equity && fund.total_equity > 0) {
+            const totalDebt = fund.total_assets - fund.total_equity
+            fundamentals.debtRatio = (totalDebt / fund.total_equity) * 100
+          }
+        }
+      } catch {
+        // fundamental_data 조회 실패 시 null 유지
+      }
+    }
+
+    // 5. ai_predictions에서 summary_text + lgbm 신호 조회
+    let summaryText: string | null = null
+    let lgbmSignal: string | null = null
+    let lgbmScore: number | null = null
+    try {
+      const { data: predRows } = await supabase
+        .from('ai_predictions')
+        .select('summary_text, signal_label, signal_score')
+        .eq('ticker', symbol)
+        .order('date', { ascending: false })
+        .limit(1)
+      if (predRows && predRows.length > 0) {
+        summaryText = predRows[0].summary_text ?? null
+        lgbmSignal  = predRows[0].signal_label ?? null
+        lgbmScore   = predRows[0].signal_score ?? null
+      }
+    } catch {
+      // ai_predictions 없어도 계속 진행
+    }
+
+    // 6. AI Score 계산
     const aiScore    = calcAiScore(rsi, macd, signalLine, close, sma50)
     const signal     = aiScore >= 1.5 ? '매수' : aiScore <= -1.5 ? '매도' : '관망'
     const reliability = calcReliability(
@@ -177,6 +269,10 @@ export async function GET(
       redditMentions,
       weeklyIssues: buildWeeklyIssues(rsi, macd, signalLine, close, sma50, master.name),
       technicals,
+      summaryText,
+      lgbmSignal,
+      lgbmScore,
+      fundamentals,
     })
   } catch (err) {
     const message =

@@ -22,6 +22,18 @@ type Analysis = {
   redditMentions: number
   weeklyIssues: string[]
   technicals: { label: string; value: string; badge: string; up: boolean | null }[]
+  summaryText: string | null
+  lgbmSignal: string | null
+  lgbmScore: number | null
+  fundamentals: {
+    per: number | null
+    pbr: number | null
+    roe: number | null
+    eps: number | null
+    revenueGrowth: number | null
+    debtRatio: number | null
+    dividendYield: number | null
+  } | null
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -252,6 +264,91 @@ function AnalysisView({
             ))}
           </div>
         </div>
+
+        {/* 재무지표 */}
+        {analysis.fundamentals && (analysis.market === 'US' || analysis.market === 'KR') && (() => {
+          const f = analysis.fundamentals
+          const hasAny = f.per || f.pbr || f.roe || f.eps
+          if (!hasAny) return null
+
+          const items: { label: string; value: string; hint: string }[] = []
+          if (f.per != null) items.push({
+            label: 'PER',
+            value: `${f.per.toFixed(1)}x`,
+            hint: f.per < 15 ? '저평가' : f.per < 30 ? '적정' : '고평가',
+          })
+          if (f.pbr != null) items.push({
+            label: 'PBR',
+            value: `${f.pbr.toFixed(2)}x`,
+            hint: f.pbr < 1 ? '자산가치 이하' : f.pbr < 3 ? '적정' : '고평가',
+          })
+          if (f.roe != null) items.push({
+            label: 'ROE',
+            value: `${f.roe.toFixed(1)}%`,
+            hint: f.roe >= 15 ? '우수' : f.roe >= 8 ? '보통' : '낮음',
+          })
+          if (f.eps != null) items.push({
+            label: 'EPS',
+            value: `$${f.eps.toFixed(2)}`,
+            hint: f.eps > 0 ? '흑자' : '적자',
+          })
+          if (f.revenueGrowth != null) items.push({
+            label: '매출성장',
+            value: `${f.revenueGrowth > 0 ? '+' : ''}${f.revenueGrowth.toFixed(1)}%`,
+            hint: f.revenueGrowth >= 10 ? '고성장' : f.revenueGrowth >= 0 ? '성장' : '역성장',
+          })
+          if (f.dividendYield != null && f.dividendYield > 0) items.push({
+            label: '배당수익률',
+            value: `${f.dividendYield.toFixed(2)}%`,
+            hint: f.dividendYield >= 3 ? '고배당' : '일반',
+          })
+
+          return (
+            <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">
+              <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-3">
+                📊 재무지표 <span className="text-slate-700 normal-case font-normal">
+                  ({analysis.market === 'US' ? 'Finnhub · TTM' : 'DART · 최근 사업보고서'})
+                </span>
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {items.map(item => {
+                  const isGood = ['저평가','자산가치 이하','우수','흑자','고성장','성장','고배당'].includes(item.hint)
+                  const isBad  = ['고평가','적자','역성장'].includes(item.hint)
+                  const hintColor = isGood ? 'text-emerald-400' : isBad ? 'text-red-400' : 'text-amber-400'
+                  return (
+                    <div key={item.label} className="bg-slate-800/60 rounded-xl p-2.5">
+                      <p className="text-[10px] text-slate-500 mb-0.5">{item.label}</p>
+                      <p className="text-sm font-bold text-white">{item.value}</p>
+                      <p className={`text-[10px] font-semibold ${hintColor}`}>{item.hint}</p>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* LightGBM 분석 요약 */}
+        {analysis.summaryText && (
+          <div className="bg-slate-900 rounded-2xl p-4 border border-indigo-500/20">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] text-indigo-400 font-semibold uppercase tracking-wider">
+                🤖 LightGBM 분석
+              </p>
+              {analysis.lgbmSignal && analysis.lgbmScore !== null && (() => {
+                const sig = analysis.lgbmSignal
+                const color = sig === 'BUY' ? 'text-emerald-400 bg-emerald-500/10' : sig === 'SELL' ? 'text-red-400 bg-red-500/10' : 'text-amber-400 bg-amber-500/10'
+                const label = sig === 'BUY' ? '매수' : sig === 'SELL' ? '매도' : '관망'
+                return (
+                  <span className={`text-[10px] font-bold rounded-full px-2.5 py-0.5 ${color}`}>
+                    {label} · {analysis.lgbmScore}점
+                  </span>
+                )
+              })()}
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">{analysis.summaryText}</p>
+          </div>
+        )}
 
         {/* Weekly Issues */}
         <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">

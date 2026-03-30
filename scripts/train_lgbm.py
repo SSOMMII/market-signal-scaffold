@@ -47,6 +47,7 @@ try:
 except ImportError as e:
     print(f"ERROR: 필요 패키지 미설치 → {e}", file=sys.stderr)
     print("설치: pip install lightgbm scikit-learn joblib pandas supabase scipy", file=sys.stderr)
+    print("선택: pip install anthropic   (summary_text AI 생성용, 없어도 동작)", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -121,23 +122,75 @@ class BetaCalibratedModel:
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
-# US ETF — 달러 자산, KOSPI 영향 없음
-US_SYMBOLS = [
-    'QQQ', 'SPY', 'SOXL', 'TQQQ', 'IWM', 'GLD', 'TLT',
-]
+_US_FALLBACK = ['QQQ', 'SPY', 'SOXL', 'TQQQ', 'IWM', 'GLD', 'TLT']
+_KR_FALLBACK = ['069500.KS', '229200.KS', '360750.KS', '305720.KS',
+                '005930.KS', '000660.KS', '035420.KS', '005380.KS']
 
-# KR ETF/주식 — 원화 자산, USDKRW·KOSPI 영향 큼
-KR_SYMBOLS = [
-    '069500.KS',   # KODEX 200
-    '229200.KS',   # KODEX KOSDAQ150
-    '360750.KS',   # TIGER 미국S&P500
-    '305720.KS',   # KODEX 반도체
-    '005930.KS',   # 삼성전자
-    '000660.KS',   # SK하이닉스
-    '035420.KS',   # NAVER
-    '005380.KS',   # 현대차
-]
 
+def _get_label_threshold(symbol: str) -> tuple[float, float]:
+    code = symbol.replace('.KS', '').replace('.KQ', '')
+
+    if code in _LEVERAGE3X_PATTERNS or symbol in _LEVERAGE3X_PATTERNS:
+        return _TIER_THRESHOLDS['leverage3x']
+    if code in _LEVERAGE2X_PATTERNS or symbol in _LEVERAGE2X_PATTERNS:
+        return _TIER_THRESHOLDS['leverage2x']
+    if code in _HIGH_VOL_PATTERNS or symbol in _HIGH_VOL_PATTERNS:
+        return _TIER_THRESHOLDS['high_vol']
+    if code in _BOND_INVERSE_PATTERNS or symbol in _BOND_INVERSE_PATTERNS:
+        return _TIER_THRESHOLDS['low_vol']
+
+    # name 기반 추가 판별
+    if hasattr(_get_label_threshold, '_name_map'):
+        name = _get_label_threshold._name_map.get(symbol, '')
+        name_hints_leverage2x = ['레버리지', '2X', '2x', 'Ultra', 'Double']
+        name_hints_leverage3x = ['3X', '3x', 'Triple', 'Ultra Pro']
+        name_hints_bond = ['국채', '단기채', '통안채', '인버스', 'Inverse', 'Bear']
+
+        if any(h in name for h in name_hints_leverage3x):
+            return _TIER_THRESHOLDS['leverage3x']
+        if any(h in name for h in name_hints_leverage2x):
+            return _TIER_THRESHOLDS['leverage2x']
+        if any(h in name for h in name_hints_bond):
+            return _TIER_THRESHOLDS['low_vol']
+
+    return _TIER_THRESHOLDS['mid_vol']
+
+
+def _load_symbols_from_db() -> tuple[list[str], list[str]]:
+    """
+    market_master에서 US/KR ETF+STOCK 심볼 로드.
+    - name도 함께 로드해 _get_label_threshold의 이름 패턴 분류에 활용
+    - 실패 시 fallback
+    """
+    try:
+        url = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            raise EnvironmentError("Supabase 환경변수 없음")
+        client = create_client(url, key)
+        res = (
+            client.table("market_master")
+            .select("symbol, market_type, name")
+            .in_("asset_type", ["ETF", "STOCK"])
+            .in_("market_type", ["US", "KR"])
+            .execute()
+        )
+        rows = res.data or []
+        us = [r["symbol"] for r in rows if r["market_type"] == "US"]
+        kr = [r["symbol"] for r in rows if r["market_type"] == "KR"]
+
+        # 이름 패턴 기반 임계값 분류를 위해 name_map 주입
+        _get_label_threshold._name_map = {r["symbol"]: (r["name"] or "") for r in rows}
+
+        if us or kr:
+            print(f"[DB] US={len(us)}개, KR={len(kr)}개 심볼 로드", file=sys.stderr)
+            return us or _US_FALLBACK, kr or _KR_FALLBACK
+    except Exception as e:
+        print(f"[WARN] DB 심볼 로드 실패, fallback 사용: {e}", file=sys.stderr)
+    return _US_FALLBACK, _KR_FALLBACK
+
+
+US_SYMBOLS, KR_SYMBOLS = _load_symbols_from_db()
 TARGET_SYMBOLS = US_SYMBOLS + KR_SYMBOLS
 
 # 크로스-에셋 피처로 쓸 종목
@@ -152,25 +205,22 @@ CROSS_ASSET_SYMBOLS = {
 # 레이블 기준 (5거래일 후 수익률)
 FORWARD_DAYS = 5
 LABEL_THRESHOLDS = {
-    'buy':  0.02,   # +2% 이상 → 매수 (1)
-    'sell': -0.02,  # -2% 이하 → 매도 (-1)
+    'buy':  0.01,   # +1% 이상 → 매수 (1)
+    'sell': -0.01,  # -1% 이하 → 매도 (-1)
 }
 
-# 종목별 임계값 (변동성 큰 종목은 더 넓게, KR 표준 종목은 ±1.5%)
-LEVERAGE_THRESHOLDS = {
-    # US 레버리지 ETF
-    'SOXL':      (0.05, -0.05),
-    'TQQQ':      (0.04, -0.04),
-    # KR 변동성 큰 종목
-    '000660.KS': (0.03, -0.03),  # SK하이닉스 (반도체 변동성)
-    '305720.KS': (0.03, -0.03),  # KODEX 반도체
-    '035420.KS': (0.03, -0.03),  # NAVER
-    # KR ETF / 블루칩 → ±1.5% (±2%보다 적절)
-    '069500.KS': (0.015, -0.015),  # KODEX 200
-    '229200.KS': (0.015, -0.015),  # KODEX KOSDAQ150
-    '360750.KS': (0.015, -0.015),  # TIGER 미국S&P500
-    '005930.KS': (0.015, -0.015),  # 삼성전자
-    '005380.KS': (0.015, -0.015),  # 현대차
+# 변동성 티어별 임계값
+# - leverage3x : 3배 레버리지 (SOXL, TQQQ 등)         → ±5%
+# - leverage2x : 2배 레버리지 (KODEX 레버리지 등)       → ±3.5%
+# - high_vol   : 고변동성 개별주/섹터 ETF               → ±3%
+# - mid_vol    : 일반 ETF / 블루칩 주식                 → ±1.5%
+# - low_vol    : 채권/인버스 ETF                        → ±1%
+_TIER_THRESHOLDS = {
+    'leverage3x': (0.05,  -0.05),
+    'leverage2x': (0.035, -0.035),
+    'high_vol':   (0.03,  -0.03),
+    'mid_vol':    (0.015, -0.015),
+    'low_vol':    (0.01,  -0.01),
 }
 
 # FOMC 결정일 (2021~2026, 공개 일정 기반)
@@ -223,6 +273,39 @@ CPI_DATES = pd.to_datetime([
     "2026-09-09", "2026-10-14", "2026-11-12", "2026-12-09",
 ])
 
+def fetch_earnings_dates(symbols: list[str]) -> dict[str, "pd.DatetimeIndex"]:
+    """
+    Finnhub 실적 발표 캘린더 조회 → {symbol: DatetimeIndex}
+    과거 2년 + 미래 1년 범위를 가져와 per-symbol 날짜 목록 반환.
+    FINNHUB_API_KEY 없거나 실패 시 빈 dict 반환.
+    """
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+
+    import urllib.request, urllib.parse, json as _json
+    from datetime import timedelta
+
+    today = date.today()
+    from_date = (today - timedelta(days=730)).strftime("%Y-%m-%d")
+    to_date   = (today + timedelta(days=365)).strftime("%Y-%m-%d")
+
+    earnings_map: dict[str, list] = {}
+    for sym in symbols:
+        try:
+            qs  = urllib.parse.urlencode({"symbol": sym, "from": from_date, "to": to_date, "token": api_key})
+            url = f"https://finnhub.io/api/v1/calendar/earnings?{qs}"
+            with urllib.request.urlopen(url, timeout=5) as r:
+                data = _json.loads(r.read())
+            dates = [e["date"] for e in data.get("earningsCalendar", []) if e.get("date")]
+            if dates:
+                earnings_map[sym] = pd.to_datetime(dates)
+        except Exception:
+            pass
+
+    return earnings_map
+
+
 MODEL_DIR = Path(__file__).parent / "models"
 US_MODEL_PATH = MODEL_DIR / "us_model.pkl"
 KR_MODEL_PATH = MODEL_DIR / "kr_model.pkl"
@@ -235,9 +318,9 @@ KR_MODEL_CAL_PATH = MODEL_DIR / "kr_model_calibrated.pkl"
 US_FEATURE_COLS = [
     "return_1d", "return_2d", "return_3d", "return_5d", "return_20d",
     "vol_20d", "vol_ratio", "hl_range",
-    "volume_spike", "obv_vs_ma",
-    "rsi", "macd_hist", "stoch_k",
-    "bb_position", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
+    "volume_spike", "price_vs_vwap", "volume_trend", "obv_vs_ma",
+    "rsi", "rsi_accel", "rsi_divergence", "macd_hist", "macd_hist_accel", "macd_cross", "stoch_k", "stoch_accel", "stoch_divergence",
+    "bb_position", "bb_zone_score", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
     "return_entry_sma50", "return_entry_sma200",  # Retention context
     "momentum_accel", "entry_confidence",  # Entry context
     "vix_close", "vix_ret_1d",
@@ -249,15 +332,16 @@ US_FEATURE_COLS = [
     "pct_from_52w_high", "pct_from_52w_low",
     "days_to_fomc", "is_fomc_week",
     "days_to_cpi",  "is_cpi_week",
+    "days_to_earnings", "is_earnings_week",
 ]
 
 # KR 피처: KOSPI + USDKRW 포함 (원화 자산 핵심 지표)
 KR_FEATURE_COLS = [
     "return_1d", "return_2d", "return_3d", "return_5d", "return_20d",
     "vol_20d", "vol_ratio", "hl_range",
-    "volume_spike", "obv_vs_ma",
-    "rsi", "macd_hist", "stoch_k",
-    "bb_position", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
+    "volume_spike", "price_vs_vwap", "volume_trend", "obv_vs_ma",
+    "rsi", "rsi_accel", "rsi_divergence", "macd_hist", "macd_hist_accel", "macd_cross", "stoch_k", "stoch_accel", "stoch_divergence",
+    "bb_position", "bb_zone_score", "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
     "return_entry_sma50", "return_entry_sma200",  # Retention context
     "momentum_accel", "entry_confidence",  # Entry context
     "vix_close", "vix_ret_1d",
@@ -272,7 +356,78 @@ KR_FEATURE_COLS = [
     "pct_from_52w_high", "pct_from_52w_low",
     "days_to_fomc", "is_fomc_week",
     "days_to_cpi",  "is_cpi_week",
+    "days_to_earnings", "is_earnings_week",
 ]
+
+# ── 피처명 한국어 매핑 ────────────────────────────────────────────────────────
+FEATURE_NAME_KO = {
+    "return_1d":          "전일 수익률",
+    "return_2d":          "2일 수익률",
+    "return_3d":          "3일 수익률",
+    "return_5d":          "5일 수익률",
+    "return_20d":         "20일 수익률",
+    "return_60d":         "60일 수익률",
+    "return_120d":        "120일 수익률",
+    "vol_20d":            "20일 변동성",
+    "vol_ratio":          "거래량 급등 비율",
+    "hl_range":           "당일 변동폭",
+    "volume_spike":       "거래량 스파이크",
+    "price_vs_vwap":      "VWAP 이격도",
+    "volume_trend":       "거래량 추세",
+    "obv_vs_ma":          "OBV 이동평균 이탈",
+    "rsi":                "RSI",
+    "rsi_accel":          "RSI 가속도",
+    "rsi_divergence":     "RSI 다이버전스",
+    "macd_hist":          "MACD 히스토그램",
+    "macd_hist_accel":    "MACD 히스토그램 가속도",
+    "macd_cross":         "MACD 크로스 방향",
+    "stoch_k":            "스토캐스틱 %K",
+    "stoch_accel":        "스토캐스틱 가속도",
+    "stoch_divergence":   "스토캐스틱 다이버전스",
+    "bb_position":        "볼린저밴드 위치",
+    "bb_zone_score":      "볼린저밴드 구간 점수",
+    "price_vs_sma50":     "SMA50 이격도",
+    "price_vs_sma120":    "SMA120 이격도",
+    "price_vs_sma200":    "SMA200 이격도",
+    "return_entry_sma50": "진입 후 SMA50 대비",
+    "return_entry_sma200":"진입 후 SMA200 대비",
+    "momentum_accel":     "모멘텀 가속도",
+    "entry_confidence":   "진입 신뢰도",
+    "vix_close":          "VIX 수준",
+    "vix_ret_1d":         "VIX 전일 변화",
+    "gold_ret_1d":        "금 전일 수익률",
+    "gold_ret_5d":        "금 5일 수익률",
+    "usdkrw_ret_1d":      "원/달러 전일 변화",
+    "usdkrw_ret_5d":      "원/달러 5일 변화",
+    "tnx_ret_1d":         "미국채10년 전일 변화",
+    "tnx_ret_5d":         "미국채10년 5일 변화",
+    "kospi_ret_1d":       "KOSPI 전일 수익률",
+    "kospi_ret_5d":       "KOSPI 5일 수익률",
+    "kospi_ret_20d":      "KOSPI 20일 수익률",
+    "kospi_rsi":          "KOSPI RSI",
+    "usdkrw_vs_ma20":     "원달러 MA20 이탈도",
+    "regime":             "시장 레짐",
+    "pct_from_52w_high":  "52주 고점 대비",
+    "pct_from_52w_low":   "52주 저점 대비",
+    "days_to_fomc":       "FOMC까지 잔여일",
+    "is_fomc_week":       "FOMC 주간 여부",
+    "days_to_cpi":        "CPI까지 잔여일",
+    "is_cpi_week":        "CPI 주간 여부",
+    "days_to_earnings":   "실적 발표까지 잔여일",
+    "is_earnings_week":   "실적 발표 주간 여부",
+}
+
+# 퍼센트 단위로 표시할 피처 집합
+_PCT_FEATURES = {
+    "return_1d", "return_2d", "return_3d", "return_5d", "return_20d",
+    "return_60d", "return_120d", "gold_ret_1d", "gold_ret_5d",
+    "vix_ret_1d", "usdkrw_ret_1d", "usdkrw_ret_5d",
+    "tnx_ret_1d", "tnx_ret_5d",
+    "kospi_ret_1d", "kospi_ret_5d", "kospi_ret_20d",
+    "price_vs_sma50", "price_vs_sma120", "price_vs_sma200",
+    "price_vs_vwap", "volume_trend", "rsi_accel", "stoch_accel",
+    "pct_from_52w_high", "pct_from_52w_low",
+}
 
 MARKET_CONFIG = {
     "us": {
@@ -352,7 +507,7 @@ def load_daily_indicators(client, symbols: list[str]) -> pd.DataFrame:
 
 # ── 피처 엔지니어링 ──────────────────────────────────────────────────────────
 
-def engineer_features(df: pd.DataFrame, cross: pd.DataFrame) -> pd.DataFrame:
+def engineer_features(df: pd.DataFrame, cross: pd.DataFrame, earnings_dates: dict[str, pd.DatetimeIndex] = None) -> pd.DataFrame:
     """종목별 피처 생성"""
     frames = []
 
@@ -372,12 +527,43 @@ def engineer_features(df: pd.DataFrame, cross: pd.DataFrame) -> pd.DataFrame:
         # ③ 거래량 비율
         g["vol_ratio"] = g["volume"] / g["volume"].rolling(20).mean()
 
-        # ④ 볼린저 밴드 위치
+        # ④ 볼린저 밴드 위치 (4구간 점수화 개선)
         band_range = g["bollinger_upper"] - g["bollinger_lower"]
-        g["bb_position"] = (g["close"] - g["bollinger_lower"]) / band_range.replace(0, np.nan)
+        bb_pos = (g["close"] - g["bollinger_lower"]) / band_range.replace(0, np.nan)
+        g["bb_position"] = bb_pos
+        
+        # Bollinger 4구간 점수화: 15%/85% 구간도 절반 점수 부여
+        g["bb_zone_score"] = 0.0
+        g.loc[bb_pos < 0.15, "bb_zone_score"] = -1.0  # 하단 15%: -1점
+        g.loc[(bb_pos >= 0.15) & (bb_pos < 0.5), "bb_zone_score"] = (bb_pos - 0.15) / 0.35 * -0.5  # 15%-50%: -0.5 ~ 0점
+        g.loc[(bb_pos >= 0.5) & (bb_pos < 0.85), "bb_zone_score"] = (bb_pos - 0.5) / 0.35 * 0.5   # 50%-85%: 0 ~ +0.5점
+        g.loc[bb_pos >= 0.85, "bb_zone_score"] = 1.0  # 상단 15%: +1점
 
-        # ⑤ MACD 히스토그램
+        # ⑤ MACD 히스토그램 및 모멘텀 개선
         g["macd_hist"] = g["macd"] - g["signal_line"]
+        
+        # MACD 히스토그램 가속도 (모멘텀 변화 감지)
+        g["macd_hist_accel"] = g["macd_hist"].diff(1)  # 전일 대비 히스토그램 변화
+        
+        # MACD 크로스 방향 (기존 유지)
+        g["macd_cross"] = 0
+        g.loc[(g["macd"] > g["signal_line"]) & (g["macd"].shift(1) <= g["signal_line"].shift(1)), "macd_cross"] = 1   # 골든크로스
+        g.loc[(g["macd"] < g["signal_line"]) & (g["macd"].shift(1) >= g["signal_line"].shift(1)), "macd_cross"] = -1  # 데드크로스
+
+        # ⑥ RSI 모멘텀 개선
+        g["rsi_accel"] = g["rsi"].diff(1)  # RSI 변화율 (모멘텀)
+        
+        # RSI 다이버전스 신호 (가격과 RSI의 방향성 차이)
+        price_trend = g["close"].pct_change(5)  # 5일 가격 추세
+        rsi_trend = g["rsi"].pct_change(5)      # 5일 RSI 추세
+        g["rsi_divergence"] = ((price_trend > 0) & (rsi_trend < 0)).astype(int) - ((price_trend < 0) & (rsi_trend > 0)).astype(int)
+
+        # ⑦ 스토캐스틱 모멘텀 개선
+        g["stoch_accel"] = g["stoch_k"].diff(1)  # 스토캐스틱 변화율
+        
+        # 스토캐스틱 다이버전스 (가격과 스토캐스틱의 방향성 차이)
+        stoch_trend = g["stoch_k"].pct_change(5)
+        g["stoch_divergence"] = ((price_trend > 0) & (stoch_trend < 0)).astype(int) - ((price_trend < 0) & (stoch_trend > 0)).astype(int)
 
         # ⑥ SMA 대비 위치 (%)
         g["price_vs_sma50"]  = (g["close"] / g["sma_50"]  - 1).replace([np.inf, -np.inf], np.nan)
@@ -387,8 +573,16 @@ def engineer_features(df: pd.DataFrame, cross: pd.DataFrame) -> pd.DataFrame:
         # ⑦ 고가-저가 범위
         g["hl_range"] = (g["high"] - g["low"]) / g["close"]
 
-        # ⑧ 거래량 스파이크
+        # ⑧ 거래량 스파이크 및 패턴 개선
         g["volume_spike"] = (g["vol_ratio"] > 2.0).astype(int)
+        
+        # 거래량 VWAP (Volume Weighted Average Price)
+        g["vwap"] = (g["close"] * g["volume"]).cumsum() / g["volume"].cumsum()
+        g["price_vs_vwap"] = (g["close"] / g["vwap"] - 1).replace([np.inf, -np.inf], np.nan)
+        
+        # 거래량 추세 (20일 평균 대비)
+        vol_ma20 = g["volume"].rolling(20).mean()
+        g["volume_trend"] = (g["volume"] / vol_ma20 - 1).replace([np.inf, -np.inf], np.nan)
 
         # ⑨ OBV
         g["obv"] = (np.sign(g["close"].diff()) * g["volume"]).cumsum()
@@ -426,7 +620,19 @@ def engineer_features(df: pd.DataFrame, cross: pd.DataFrame) -> pd.DataFrame:
         g["days_to_cpi"] = g["as_of_date"].apply(_days_to_next_cpi)
         g["is_cpi_week"]  = (g["days_to_cpi"] <= 5).astype(int)
 
-        # ⑭ Retention Context Features (진입 맥락)
+        # ⑭ 실적 발표 이벤트 피처
+        if earnings_dates and symbol in earnings_dates:
+            symbol_earnings = earnings_dates[symbol]
+            def _days_to_next_earnings(dt):
+                future = symbol_earnings[symbol_earnings >= dt]
+                return (future[0] - dt).days if len(future) else 90  # 90일 기본값
+            g["days_to_earnings"] = g["as_of_date"].apply(_days_to_next_earnings)
+            g["is_earnings_week"] = (g["days_to_earnings"] <= 5).astype(int)
+        else:
+            g["days_to_earnings"] = 90
+            g["is_earnings_week"] = 0
+
+        # ⑮ Retention Context Features (진입 맥락)
         # return_entry는 현재 가격이 주요 이동평균에서 얼마나 떨어져 있는지 추적
         # 다양한 진입 포인트에서의 발동 조건을 파악하는 데 도움
         g["return_entry_sma50"]  = (g["close"] - g["sma_50"]) / g["sma_50"].replace(0, np.nan)
@@ -501,10 +707,7 @@ def make_labels(
         if binary:
             g["label"] = (g["forward_ret"] > 0).astype(int)  # 1=상승, 0=하락
         else:
-            buy_th, sell_th = LEVERAGE_THRESHOLDS.get(
-                symbol,
-                (LABEL_THRESHOLDS["buy"], LABEL_THRESHOLDS["sell"])
-            )
+            buy_th, sell_th = _get_label_threshold(symbol)
             g["label"] = 0
             g.loc[g["forward_ret"] >= buy_th,  "label"] =  1
             g.loc[g["forward_ret"] <= sell_th, "label"] = -1
@@ -846,6 +1049,109 @@ def train_market(
 
 # ── 예측 및 Supabase upsert ──────────────────────────────────────────────────
 
+def generate_summary_text(
+    ticker: str,
+    market: str,
+    signal_label: str,
+    signal_score: int,
+    buy_prob: float,
+    sell_prob: float,
+    contributions: list[dict],
+    row=None,
+) -> str:
+    """
+    피처 값을 분석해 규칙 기반 한국어 분석 텍스트를 생성합니다. (API 불필요)
+    row: predict_and_upsert의 원본 행 (contributions에 없는 피처도 참조하기 위해 사용)
+    """
+    # row 전체에서 피처 값 읽기 (contributions는 상위 5개만이라 누락될 수 있음)
+    def _get(key):
+        if row is not None and pd.notna(row.get(key)):
+            return float(row[key])
+        # fallback: contributions에서 탐색
+        for c in contributions:
+            if c["feature"] == key and c.get("value") is not None:
+                return c["value"]
+        return None
+
+    fv = {key: _get(key) for key in [
+        "return_5d", "return_20d", "rsi", "bb_position",
+        "vix_close", "usdkrw_ret_1d", "tnx_ret_1d",
+    ]}
+
+    sentences = []
+
+    # ── 1) 모멘텀 문장 ────────────────────────────────────────────
+    r5  = fv.get("return_5d")
+    r20 = fv.get("return_20d")
+    if r5 is not None and r20 is not None:
+        r5_pct  = r5  * 100
+        r20_pct = r20 * 100
+        if r5_pct > 3:
+            mom_str = f"5일 수익률 {r5_pct:+.1f}%의 강한 단기 상승 모멘텀이 확인됩니다."
+        elif r5_pct > 0:
+            mom_str = f"5일 수익률 {r5_pct:+.1f}%로 단기 흐름이 소폭 우세합니다."
+        elif r5_pct > -3:
+            mom_str = f"5일 수익률 {r5_pct:+.1f}%로 단기 흐름이 약세를 보이고 있습니다."
+        else:
+            mom_str = f"5일 수익률 {r5_pct:+.1f}%의 뚜렷한 단기 하락 압력이 나타나고 있습니다."
+        if abs(r20_pct) > 5:
+            trend = "상승" if r20_pct > 0 else "하락"
+            mom_str += f" 20일 기준으로도 {r20_pct:+.1f}% {trend} 추세가 지속 중입니다."
+        sentences.append(mom_str)
+
+    # ── 2) 기술적 지표 문장 (RSI + BB) ───────────────────────────
+    rsi    = fv.get("rsi")
+    bb_pos = fv.get("bb_position")
+    tech_parts = []
+    if rsi is not None:
+        if rsi >= 70:
+            tech_parts.append(f"RSI {rsi:.0f}로 과매수 구간에 진입해 있습니다")
+        elif rsi <= 30:
+            tech_parts.append(f"RSI {rsi:.0f}로 과매도 구간에 위치합니다")
+        else:
+            tech_parts.append(f"RSI {rsi:.0f}로 중립 구간을 유지 중입니다")
+    if bb_pos is not None:
+        if bb_pos > 0.8:
+            tech_parts.append("볼린저밴드 상단 근접으로 단기 과열 가능성이 있습니다")
+        elif bb_pos < 0.2:
+            tech_parts.append("볼린저밴드 하단 근접으로 반등 가능성이 있습니다")
+    if tech_parts:
+        sentences.append(". ".join(tech_parts) + ".")
+
+    # ── 3) 크로스에셋/거시 문장 ───────────────────────────────────
+    vix      = fv.get("vix_close")
+    usdkrw   = fv.get("usdkrw_ret_1d")
+    tnx      = fv.get("tnx_ret_1d")
+    macro_parts = []
+    if vix is not None:
+        if vix >= 25:
+            macro_parts.append(f"VIX {vix:.1f}로 시장 불안심리가 높은 상태입니다")
+        elif vix <= 15:
+            macro_parts.append(f"VIX {vix:.1f}로 시장 변동성이 낮아 안정적 흐름입니다")
+    if market == "KR" and usdkrw is not None:
+        usdkrw_pct = usdkrw * 100
+        if usdkrw_pct > 0.5:
+            macro_parts.append(f"원/달러 {usdkrw_pct:+.2f}% 상승으로 외국인 수급에 부담이 있습니다")
+        elif usdkrw_pct < -0.5:
+            macro_parts.append(f"원/달러 {usdkrw_pct:+.2f}% 하락으로 원화 강세가 수급에 우호적입니다")
+    if tnx is not None:
+        tnx_pct = tnx * 100
+        if tnx_pct > 2:
+            macro_parts.append(f"미국채 10년물 금리가 {tnx_pct:+.2f}% 상승해 밸류에이션 압박이 있습니다")
+    if macro_parts:
+        sentences.append(". ".join(macro_parts) + ".")
+
+    # ── 4) 최종 신호 결론 ────────────────────────────────────────
+    label_ko = {"BUY": "매수", "SELL": "매도", "HOLD": "관망"}.get(signal_label, signal_label)
+    conclusion = (
+        f"종합적으로 AI 모델은 {label_ko} 신호를 제시하며 "
+        f"상승 확률 {buy_prob*100:.1f}%, 스코어 {signal_score}점으로 평가됩니다."
+    )
+    sentences.append(conclusion)
+
+    return " ".join(sentences)
+
+
 def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_version: str = "all"):
     """
     예측 및 Supabase upsert
@@ -908,10 +1214,34 @@ def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_ver
         pred_label   = label_map_spec[pred_class]
         signal_score = int((buy_prob - sell_prob + 1) / 2 * 100)
 
+        # 모델 feature importance 기준 상위 5개 피처를 contributions로 사용
+        try:
+            base_model = model.estimator if hasattr(model, "estimator") else model
+            if hasattr(base_model, "feature_importances_"):
+                imp = base_model.feature_importances_
+                top_idx = np.argsort(imp)[::-1][:5]
+                top_features = [features[i] for i in top_idx if i < len(features)]
+            else:
+                top_features = features[:5]
+        except Exception:
+            top_features = features[:5]
+
         contributions = [
             {"feature": f, "value": float(row[f]) if pd.notna(row.get(f)) else None}
-            for f in features[:5]
+            for f in top_features
         ]
+
+        market_str = spec.get("market", "?")
+        summary = generate_summary_text(
+            ticker=symbol,
+            market=market_str,
+            signal_label=pred_label,
+            signal_score=signal_score,
+            buy_prob=buy_prob,
+            sell_prob=sell_prob,
+            contributions=contributions,
+            row=row,
+        )
 
         rows_to_upsert.append({
             "ticker":        symbol,
@@ -923,10 +1253,7 @@ def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_ver
             "breakdown":     json.dumps(breakdown),
             "entry_price":   float(row["close"]) if pd.notna(row.get("close")) else None,
             "entry_date":    str(row["as_of_date"].date()),
-            "summary_text": (
-                f"{symbol} LightGBM ({spec.get('market', '?')}) 예측: {pred_label} "
-                f"(상승확률 {buy_prob*100:.1f}% / 하락확률 {sell_prob*100:.1f}%)"
-            ),
+            "summary_text":  summary,
         })
 
         print(f"  [{spec.get('market','?')}] {symbol:12s}: {pred_label:4s} | score={signal_score} | {log_extra}",
@@ -1004,8 +1331,11 @@ def main():
     print("[INFO] 크로스-에셋 피처 생성 중...", file=sys.stderr)
     cross = build_cross_asset(df_raw)
 
+    print("[INFO] 실적 발표일 데이터 조회 중...", file=sys.stderr)
+    earnings_dates = fetch_earnings_dates(TARGET_SYMBOLS)
+
     df_target = df_raw[df_raw["symbol"].isin(TARGET_SYMBOLS)].copy()
-    df_feat = engineer_features(df_target, cross)
+    df_feat = engineer_features(df_target, cross, earnings_dates)
 
     if args.predict_only:
         # 저장된 모델 로드 후 예측만

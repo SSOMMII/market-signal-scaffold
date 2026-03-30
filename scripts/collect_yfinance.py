@@ -45,18 +45,44 @@ _PYKRX_INDEX_MAP = {
     '^KQ11': '2001',   # KOSDAQ
 }
 
-# 수집 대상 종목 목록
-TARGETS = {
-    'ETF':      ['QQQ', 'SPY', 'IWM', 'GLD', 'TLT', 'SOXL', 'TQQQ'],
-    'INDEX':    ['^GSPC', '^IXIC', '^DJI', '^VIX', '^KS11', '^KQ11'],
-    'FUTURES':  ['NQ=F', 'ES=F', 'YM=F'],
-    'FX':       ['USDKRW=X', 'EURUSD=X', 'JPY=X'],
-    'COMMODITY':['GC=F', 'CL=F'],
-    # 국내 ETF (KODEX/TIGER 대표 ETF)
-    'KR_ETF':   ['069500.KS', '229200.KS', '360750.KS', '305720.KS', '114800.KS'],
-    # 국내 개별주 (대형주 5종)
-    'KR_STOCK': ['005930.KS', '000660.KS', '035420.KS', '035720.KS', '005380.KS'],
-}
+# 고정 수집 대상 (지수/선물/환율 — DB 관리 대상 아님)
+_FIXED_TARGETS = [
+    '^GSPC', '^IXIC', '^DJI', '^VIX', '^KS11', '^KQ11',  # INDEX
+    'NQ=F', 'ES=F', 'YM=F',                               # FUTURES
+    'USDKRW=X', 'EURUSD=X', 'JPY=X',                      # FX
+    'GC=F', 'CL=F',                                        # COMMODITY
+]
+
+# ETF/STOCK 기본값 (DB 로드 실패 시 fallback)
+_FALLBACK_ETF_STOCK = [
+    'QQQ', 'SPY', 'IWM', 'GLD', 'TLT', 'SOXL', 'TQQQ',
+    '069500.KS', '229200.KS', '360750.KS', '305720.KS', '114800.KS',
+    '005930.KS', '000660.KS', '035420.KS', '035720.KS', '005380.KS',
+]
+
+
+def _load_etf_stock_from_db() -> list[str]:
+    """Supabase market_master에서 ETF/STOCK 심볼 목록 로드. 실패 시 fallback 반환."""
+    try:
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            raise EnvironmentError("Supabase 환경변수 없음")
+        client = create_client(url, key)
+        res = (
+            client.table("market_master")
+            .select("symbol")
+            .in_("asset_type", ["ETF", "STOCK"])
+            .execute()
+        )
+        symbols = [r["symbol"] for r in (res.data or [])]
+        if symbols:
+            print(f"[DB] market_master에서 {len(symbols)}개 종목 로드", file=sys.stderr)
+            return symbols
+    except Exception as e:
+        print(f"[WARN] DB 로드 실패, fallback 사용: {e}", file=sys.stderr)
+    return _FALLBACK_ETF_STOCK
 
 # 지표 계산에 필요한 최소 데이터 기간 (SMA200 기준)
 _INDICATOR_FETCH_PERIOD = '1y'
@@ -170,7 +196,7 @@ def _collect_kr_index_ohlcv_pykrx(symbol: str, start_date: str, end_date: str) -
 def collect_ohlcv(period: str = '5d') -> list[dict]:
     """기간(period) 기반 수집 — 지표 계산을 위해 내부적으로 1년치 데이터 사용"""
     results = []
-    all_symbols = [s for group in TARGETS.values() for s in group]
+    all_symbols = _FIXED_TARGETS + _load_etf_stock_from_db()
     req_rows = _period_to_rows(period)
 
     # 한국 지수는 pykrx로 우선 수집
@@ -214,7 +240,7 @@ def collect_by_date(start_date: str, end_date: str) -> list[dict]:
     """날짜 범위 기반 수집 (YYYY-MM-DD 형식)"""
     from datetime import datetime, date as _date
     results = []
-    all_symbols = [s for group in TARGETS.values() for s in group]
+    all_symbols = _FIXED_TARGETS + _load_etf_stock_from_db()
 
     # 한국 지수는 pykrx로 우선 수집
     kr_index_symbols = set(_PYKRX_INDEX_MAP.keys())
