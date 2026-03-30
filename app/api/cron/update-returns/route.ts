@@ -48,18 +48,24 @@ export async function GET(request: Request) {
     const predDate   = row.as_of_date as string
     const targetDate = addCalendarDays(predDate, 7) // ~5거래일
 
+    // market_master에서 해당 symbol의 id 가져오기
+    const { data: marketMasterData } = await supabase
+      .from('market_master')
+      .select('id')
+      .eq('symbol', row.etf_code)
+      .maybeSingle()
+
+    if (!marketMasterData) {
+      console.warn(`[update-returns] market_master에서 ${row.etf_code}를 찾을 수 없음`)
+      continue
+    }
+
     // 예측 당일 close
     const { data: predDay } = await supabase
       .from('daily_indicators')
       .select('close')
       .eq('as_of_date', predDate)
-      .in(
-        'market_master_id',
-        supabase
-          .from('market_master')
-          .select('id')
-          .eq('symbol', row.etf_code)
-      )
+      .eq('market_master_id', marketMasterData.id)
       .maybeSingle()
 
     // T+7캘린더 이내 가장 가까운 거래일 close (데이터가 있는 최신일)
@@ -68,13 +74,7 @@ export async function GET(request: Request) {
       .select('close, as_of_date')
       .gte('as_of_date', addCalendarDays(predDate, 5))
       .lte('as_of_date', targetDate)
-      .in(
-        'market_master_id',
-        supabase
-          .from('market_master')
-          .select('id')
-          .eq('symbol', row.etf_code)
-      )
+      .eq('market_master_id', marketMasterData.id)
       .order('as_of_date', { ascending: false })
       .maybeSingle()
 
