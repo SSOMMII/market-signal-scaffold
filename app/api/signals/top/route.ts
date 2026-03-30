@@ -40,8 +40,8 @@ const TECH_WEIGHT = 0.4
 const AI_WEIGHT   = 0.6
 
 // Confidence threshold (LightGBM 신뢰도)
-const CONFIDENCE_THRESHOLD_SELL = 0.40
-const CONFIDENCE_THRESHOLD_BUY = 0.60
+const CONFIDENCE_THRESHOLD_SELL = Number(process.env.LGBM_CONFIDENCE_THRESHOLD_SELL ?? '0.40')
+const CONFIDENCE_THRESHOLD_BUY  = Number(process.env.LGBM_CONFIDENCE_THRESHOLD_BUY  ?? '0.60')
 
 /** 기술적 스코어(-4.5 ~ +4.5)를 0-100으로 정규화 */
 function normalizeTechScore(score: number): number {
@@ -97,8 +97,10 @@ function hybridScoreToAction(hybridScore: number): '매수' | '매도' | '관망
 function applyConfidenceFilter(action: '매수' | '매도' | '관망', lgbm_prob: number | null): '매수' | '매도' | '관망' {
   if (lgbm_prob === null) return action
 
-  // 신뢰도 0.60 이상일 때만 강한 신호 유지
-  if ((action === '매수' || action === '매도') && lgbm_prob < 0.60) {
+  if (action === '매수' && lgbm_prob < CONFIDENCE_THRESHOLD_BUY) {
+    return '관망'
+  }
+  if (action === '매도' && lgbm_prob < CONFIDENCE_THRESHOLD_SELL) {
     return '관망'
   }
   
