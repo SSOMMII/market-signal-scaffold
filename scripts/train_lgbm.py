@@ -223,6 +223,12 @@ _TIER_THRESHOLDS = {
     'low_vol':    (0.01,  -0.01),
 }
 
+# 티어 분류 패턴 (심볼 코드 기반)
+_LEVERAGE3X_PATTERNS = {'SOXL', 'TQQQ', 'LABU', 'SPXL', 'UPRO', 'FNGU', 'WEBL'}
+_LEVERAGE2X_PATTERNS = {'QLD', 'SSO', 'USD', 'ROM', 'UWM', '122630', '233740'}  # 122630=KODEX레버리지, 233740=KODEX코스닥150레버리지
+_HIGH_VOL_PATTERNS   = {'SOXS', 'ARKK', 'ARKG', 'ARKW', '005930', '000660', '035420', '035720', '005380'}
+_BOND_INVERSE_PATTERNS = {'TLT', 'TBT', 'TMF', 'IEF', 'SHY', '114800', '252670', '195930'}  # 114800=TIGER인버스, 252670=KODEX인버스2X
+
 # FOMC 결정일 (2021~2026, 공개 일정 기반)
 FOMC_DATES = pd.to_datetime([
     # 2021
@@ -461,8 +467,13 @@ def get_supabase():
 
 # ── 데이터 로드 ───────────────────────────────────────────────────────────────
 
+TRAIN_LOOKBACK_YEARS = 3  # 학습 데이터 기간 (년)
+
 def load_daily_indicators(client, symbols: list[str]) -> pd.DataFrame:
-    """Supabase에서 지정 종목들의 daily_indicators 전체 로드"""
+    """Supabase에서 지정 종목들의 daily_indicators 로드 (최근 TRAIN_LOOKBACK_YEARS년)"""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=365 * TRAIN_LOOKBACK_YEARS)).isoformat()
+
     res = client.table("market_master").select("id, symbol").in_("symbol", symbols).execute()
     id_to_symbol = {r["id"]: r["symbol"] for r in res.data}
     ids = list(id_to_symbol.keys())
@@ -481,6 +492,7 @@ def load_daily_indicators(client, symbols: list[str]) -> pd.DataFrame:
                     "rsi, macd, signal_line, sma_50, sma_120, sma_200, "
                     "bollinger_upper, bollinger_lower, stoch_k")
             .in_("market_master_id", ids)
+            .gte("as_of_date", cutoff)
             .order("as_of_date", desc=False)
             .range(offset, offset + page_size - 1)
             .execute()
@@ -1254,6 +1266,7 @@ def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_ver
             "entry_price":   float(row["close"]) if pd.notna(row.get("close")) else None,
             "entry_date":    str(row["as_of_date"].date()),
             "summary_text":  summary,
+            "model_version": "A",
         })
 
         print(f"  [{spec.get('market','?')}] {symbol:12s}: {pred_label:4s} | score={signal_score} | {log_extra}",
@@ -1264,22 +1277,11 @@ def predict_and_upsert(client, model_specs: list[dict], df: pd.DataFrame, ab_ver
         # (기존 ai_predictions 테이블이 지원하면 저장, 아니면 로깅만)
         try:
             client.table("ai_predictions").upsert(
-                rows_to_upsert, on_conflict="ticker,date"
+                rows_to_upsert, on_conflict="ticker,date,model_version"
             ).execute()
             print(f"\n[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료", file=sys.stderr)
         except Exception as e:
-            print(f"[WARN] ai_predictions upsert 실패: {e}", file=sys.stderr)
-            # DB에 없는 컬럼 제거하고 재시도
-            for row in rows_to_upsert:
-                for col in ("model_version", "entry_date", "entry_price"):
-                    row.pop(col, None)
-            try:
-                client.table("ai_predictions").upsert(
-                    rows_to_upsert, on_conflict="ticker,date"
-                ).execute()
-                print(f"[OK] ai_predictions에 {len(rows_to_upsert)}건 upsert 완료 (불필요 컬럼 제외)", file=sys.stderr)
-            except Exception as e2:
-                print(f"[ERROR] ai_predictions upsert 재시도 실패: {e2}", file=sys.stderr)
+            print(f"[ERROR] ai_predictions upsert 실패: {e}", file=sys.stderr)
 
         history_rows = [
             {

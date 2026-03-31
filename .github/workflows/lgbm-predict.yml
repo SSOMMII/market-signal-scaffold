@@ -4,6 +4,8 @@ on:
   # 평일 22:00 UTC (한국 다음날 오전 7시) — 미국 장 마감(21:00 UTC) 후 1시간 뒤
   schedule:
     - cron: "0 22 * * 1-5"
+    # 매월 1일 02:00 UTC — 월간 자동 재학습 (Optuna 튜닝 포함)
+    - cron: "0 2 1 * *"
 
   # 수동 실행 (GitHub Actions 탭에서 Run workflow 버튼)
   workflow_dispatch:
@@ -60,8 +62,18 @@ jobs:
           key: lgbm-models-${{ hashFiles('scripts/train_lgbm.py') }}
           restore-keys: lgbm-models-
 
+      # 매월 1일 자동 재학습 (Optuna 튜닝 포함, 캐시 무시)
+      - name: Monthly retrain with tuning (자동)
+        if: |
+          github.event_name == 'schedule' &&
+          github.event.schedule == '0 2 1 * *'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/train_lgbm.py --tune --n-trials 50 --market all
+
       # Optuna 튜닝 포함 전체 재학습 (수동: train-tune)
-      - name: Train with Optuna tuning
+      - name: Train with Optuna tuning (수동)
         if: github.event.inputs.mode == 'train-tune'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -74,7 +86,9 @@ jobs:
       - name: Train without tuning
         if: |
           github.event.inputs.mode == 'train' ||
-          (steps.model-cache.outputs.cache-hit != 'true' && github.event.inputs.mode != 'train-tune')
+          (steps.model-cache.outputs.cache-hit != 'true' &&
+           github.event.inputs.mode != 'train-tune' &&
+           github.event_name != 'schedule')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -82,11 +96,13 @@ jobs:
           MARKET="${{ github.event.inputs.market || 'all' }}"
           python scripts/train_lgbm.py --market "$MARKET"
 
-      # 모델 있으면 예측만 (매일 기본 스케줄)
+      # 모델 있으면 예측만 (매일 평일 스케줄)
       - name: Predict only (매일 기본)
         if: |
-          steps.model-cache.outputs.cache-hit == 'true' &&
-          (github.event.inputs.mode == 'predict-only' || github.event_name == 'schedule')
+          github.event.inputs.mode == 'predict-only' ||
+          (github.event_name == 'schedule' &&
+           github.event.schedule == '0 22 * * 1-5' &&
+           steps.model-cache.outputs.cache-hit == 'true')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

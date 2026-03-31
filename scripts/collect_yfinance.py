@@ -13,8 +13,19 @@ Usage:
 """
 
 import json
+import os
 import sys
 from datetime import date, timedelta
+from pathlib import Path
+
+# .env.local 자동 로드
+_env_file = Path(__file__).parent.parent / ".env.local"
+if _env_file.exists():
+    for _line in _env_file.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 try:
     import yfinance as yf
@@ -61,6 +72,13 @@ _FALLBACK_ETF_STOCK = [
 ]
 
 
+def _normalize_kr_symbol(symbol: str) -> str:
+    """6자리 KR 종목코드에 .KS 접미사 추가 (yfinance 형식)"""
+    if symbol.isdigit() and len(symbol) == 6:
+        return symbol + '.KS'
+    return symbol
+
+
 def _load_etf_stock_from_db() -> list[str]:
     """Supabase market_master에서 ETF/STOCK 심볼 목록 로드. 실패 시 fallback 반환."""
     try:
@@ -76,7 +94,7 @@ def _load_etf_stock_from_db() -> list[str]:
             .in_("asset_type", ["ETF", "STOCK"])
             .execute()
         )
-        symbols = [r["symbol"] for r in (res.data or [])]
+        symbols = [_normalize_kr_symbol(r["symbol"]) for r in (res.data or [])]
         if symbols:
             print(f"[DB] market_master에서 {len(symbols)}개 종목 로드", file=sys.stderr)
             return symbols

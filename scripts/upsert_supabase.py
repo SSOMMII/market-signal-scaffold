@@ -254,7 +254,7 @@ def main() -> None:
     # --input 파일 지정 시 파일에서 읽기, 아니면 stdin
     if args.input:
         try:
-            raw = Path(args.input).read_text(encoding="utf-8").strip()
+            raw = Path(args.input).read_text(encoding="utf-8-sig").strip()
         except FileNotFoundError:
             print(f"ERROR: 파일을 찾을 수 없습니다: {args.input}", file=sys.stderr)
             sys.exit(1)
