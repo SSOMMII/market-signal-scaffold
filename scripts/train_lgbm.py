@@ -442,7 +442,7 @@ MARKET_CONFIG = {
         "model_path":   US_MODEL_PATH,
         "label":        "US",
         "forward_days": 5,
-        "binary":       False,
+        "binary":       True,   # 이진분류: 5일 후 상승(BUY) / 하락(SELL) — 3분류 대비 Platt 확률 분산 개선
     },
     "kr": {
         "symbols":      KR_SYMBOLS,
