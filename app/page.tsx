@@ -11,6 +11,7 @@ import {
   SparklesIcon,
   ChevronRightIcon,
 } from '@/components/icons'
+import { GeoRiskPanel } from '@/components/GeoRiskPanel'
 
 // ── 포맷 헬퍼 ──────────────────────────────────────────────────────────
 function fmt0(v: number | null) { return v ? Math.round(v).toLocaleString() : '-' }
@@ -456,6 +457,7 @@ export default function DashboardPage() {
 
         {/* Right column */}
         <div className="space-y-6">
+          <GeoRiskPanel />
 
           {/* Signal Card */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
