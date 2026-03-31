@@ -7,7 +7,7 @@
 
 const DART_BASE = 'https://opendart.fss.or.kr/api'
 
-async function dartGet<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+export async function dartGet<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   const apiKey = process.env.DART_API_KEY
   if (!apiKey) throw new Error('DART_API_KEY not set')
 

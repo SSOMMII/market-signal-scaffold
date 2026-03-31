@@ -12,7 +12,7 @@ import {
   ChevronRightIcon,
 } from '@/components/icons'
 import { GeoRiskPanel } from '@/components/GeoRiskPanel'
-import { IpoPanel } from '@/components/IpoPanel'
+import { IpoCalendar } from '@/components/IpoCalendar'
 
 // ── 포맷 헬퍼 ──────────────────────────────────────────────────────────
 function fmt0(v: number | null) { return v ? Math.round(v).toLocaleString() : '-' }
@@ -480,7 +480,7 @@ export default function DashboardPage() {
               </Link>
             </div>
             <div className="p-4 space-y-2">
-              {(realSignals ?? d.signals).map(({ ticker, name, change, score, action, confidence, signalStrength, up }) => {
+              {(realSignals ?? d.signals).slice(0, 5).map(({ ticker, name, change, score, action, confidence, signalStrength, up }) => {
                 const strengthColor = signalStrength?.includes('강한 매수') ? 'bg-emerald-100 text-emerald-700'
                   : signalStrength?.includes('매수') ? 'bg-emerald-50 text-emerald-600'
                   : signalStrength?.includes('관망') ? 'bg-slate-100 text-slate-600'
@@ -533,6 +533,14 @@ export default function DashboardPage() {
                 )
               })}
             </div>
+            { (realSignals ?? d.signals).length > 5 && (
+              <div className="px-4 pb-4 pt-2 text-right">
+                <Link href="/detail"
+                  className="inline-flex items-center gap-1 text-xs text-indigo-600 font-medium hover:underline">
+                  전체 보기 <ChevronRightIcon />
+                </Link>
+              </div>
+            )}
           </div>
 
           {/* TODO: 내 포트폴리오 — 실제 사용자 포트폴리오 DB 연동 후 활성화 */}
@@ -542,7 +550,7 @@ export default function DashboardPage() {
           {/* <div className={`bg-gradient-to-br ...`}> ... </div> */}
 
           {/* 공모주 캘린더 */}
-          <IpoPanel />
+          <IpoCalendar />
         </div>
       </div>
     </div>

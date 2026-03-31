@@ -2,54 +2,28 @@
 import { useEffect, useState } from 'react'
 
 interface IpoItem {
-  name: string          // 종목명
-  code?: string         // 종목코드
-  subscriptionStart: string  // 청약 시작일 (YYYY-MM-DD)
-  subscriptionEnd: string    // 청약 종료일
-  listingDate: string        // 상장 예정일
-  priceMin: number           // 공모가 하단
-  priceMax: number           // 공모가 상단
-  brokers: string[]          // 주관사 (청약 가능 증권사)
+  name: string
+  code?: string
+  filedAt?: string
+  subscriptionStart: string
+  subscriptionEnd: string
+  listingDate: string
+  priceMin: number
+  priceMax: number
+  brokers: string[]
   marketType: 'KOSPI' | 'KOSDAQ' | 'KONEX' | '-'
+  reportName?: string
+  competitionRatio?: string
+  proportionalRatio?: string
+  equalAllocExpected?: string
+  allocatedQty?: string
+  totalSubscribers?: string
+  totalSubscriptionQty?: string
+  hasDetail?: boolean
 }
 
-// DART API 연동 전 UI 확인용 목업 데이터
-const MOCK_IPO: IpoItem[] = [
-  {
-    name: '(주)예시기업A',
-    code: '123450',
-    subscriptionStart: '2026-04-07',
-    subscriptionEnd: '2026-04-08',
-    listingDate: '2026-04-15',
-    priceMin: 12000,
-    priceMax: 14000,
-    brokers: ['미래에셋', 'KB증권'],
-    marketType: 'KOSDAQ',
-  },
-  {
-    name: '(주)예시기업B',
-    code: '234560',
-    subscriptionStart: '2026-04-10',
-    subscriptionEnd: '2026-04-11',
-    listingDate: '2026-04-18',
-    priceMin: 30000,
-    priceMax: 35000,
-    brokers: ['한국투자', '삼성증권', 'NH투자'],
-    marketType: 'KOSPI',
-  },
-  {
-    name: '(주)예시기업C',
-    subscriptionStart: '2026-04-14',
-    subscriptionEnd: '2026-04-15',
-    listingDate: '2026-04-22',
-    priceMin: 8000,
-    priceMax: 9000,
-    brokers: ['키움증권'],
-    marketType: 'KOSDAQ',
-  },
-]
-
 function getDday(dateStr: string): string {
+  if (!dateStr) return '-'
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const target = new Date(dateStr)
@@ -61,23 +35,42 @@ function getDday(dateStr: string): string {
 }
 
 function isSubscriptionOpen(start: string, end: string): boolean {
+  if (!start || !end) return false
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   return today >= new Date(start) && today <= new Date(end)
 }
 
+function StatItem({ label, value }: { label: string; value?: string }) {
+  if (!value) return null
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] text-slate-400">{label}</span>
+      <span className="text-[11px] font-semibold text-slate-700">{value}</span>
+    </div>
+  )
+}
+
 export function IpoPanel() {
-  const [items, setItems] = useState<IpoItem[]>(MOCK_IPO)
-  const [loading, setLoading] = useState(false)
+  const [items, setItems] = useState<IpoItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // DART API 연동 시 아래 주석 해제
-    // setLoading(true)
-    // fetch('/api/ipo')
-    //   .then(r => r.json())
-    //   .then(({ data }) => { if (data?.length) setItems(data) })
-    //   .catch(() => {})
-    //   .finally(() => setLoading(false))
+    let mounted = true
+    fetch('/api/ipo')
+      .then(r => r.json())
+      .then(payload => {
+        if (!mounted) return
+        if (Array.isArray(payload?.data)) {
+          setItems(payload.data)
+        } else if (payload?.error) {
+          setError(payload.error)
+        }
+      })
+      .catch(() => setError('데이터를 불러올 수 없습니다'))
+      .finally(() => { if (mounted) setLoading(false) })
+    return () => { mounted = false }
   }, [])
 
   return (
@@ -93,80 +86,128 @@ export function IpoPanel() {
           </div>
           <div>
             <h3 className="font-bold text-slate-900">공모주 캘린더</h3>
-            <p className="text-xs text-slate-400">청약 일정 · 증권사별 안내</p>
+            <p className="text-xs text-slate-400">청약 일정 · 발행실적 · DART 연동</p>
           </div>
         </div>
-        <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">
-          DART 연동 예정
+        <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
+          DART Live
         </span>
       </div>
 
       {/* 목록 */}
       <div className="p-4 space-y-3">
         {loading && (
-          <p className="text-center text-xs text-slate-400 py-4">불러오는 중...</p>
+          <p className="text-center text-xs text-slate-400 py-6">불러오는 중...</p>
         )}
+
+        {!loading && error && (
+          <p className="text-center text-xs text-red-400 py-6">{error}</p>
+        )}
+
+        {!loading && !error && items.length === 0 && (
+          <p className="text-center text-xs text-slate-400 py-6">
+            최근 90일간 지분증권 공모 내역이 없습니다
+          </p>
+        )}
+
         {!loading && items.map((ipo, i) => {
           const open = isSubscriptionOpen(ipo.subscriptionStart, ipo.subscriptionEnd)
-          const dday = getDday(ipo.subscriptionStart)
+          const dday = getDday(ipo.subscriptionStart || ipo.filedAt || '')
+          const hasStats = ipo.competitionRatio || ipo.totalSubscribers || ipo.allocatedQty
+
           return (
             <div key={i} className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
-              {/* 종목명 + 시장 + D-day */}
+              {/* 종목명 + 시장 + 상태 */}
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-slate-900">{ipo.name}</span>
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                    ipo.marketType === 'KOSPI' ? 'bg-blue-50 text-blue-600'
-                    : ipo.marketType === 'KOSDAQ' ? 'bg-emerald-50 text-emerald-600'
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-bold text-slate-900 truncate">{ipo.name}</span>
+                  {ipo.marketType !== '-' && (
+                    <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                      ipo.marketType === 'KOSPI' ? 'bg-blue-50 text-blue-600'
+                      : ipo.marketType === 'KOSDAQ' ? 'bg-emerald-50 text-emerald-600'
+                      : 'bg-purple-50 text-purple-600'
+                    }`}>
+                      {ipo.marketType}
+                    </span>
+                  )}
+                </div>
+                {ipo.subscriptionStart ? (
+                  <span className={`shrink-0 text-xs font-bold px-2 py-0.5 rounded-full ${
+                    open ? 'bg-emerald-100 text-emerald-700'
+                    : dday.startsWith('D-') && dday !== 'D-' ? 'bg-amber-50 text-amber-600'
                     : 'bg-slate-100 text-slate-500'
                   }`}>
-                    {ipo.marketType}
+                    {open ? '청약중' : dday}
                   </span>
-                </div>
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                  open ? 'bg-emerald-100 text-emerald-700'
-                  : dday.startsWith('D-') ? 'bg-amber-50 text-amber-600'
-                  : 'bg-slate-100 text-slate-500'
-                }`}>
-                  {open ? '청약중' : dday}
-                </span>
+                ) : (
+                  <span className="shrink-0 text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                    공시완료
+                  </span>
+                )}
               </div>
 
               {/* 청약기간 / 상장일 */}
-              <div className="flex gap-4 text-[11px] text-slate-500">
-                <span>
-                  <span className="text-slate-400">청약 </span>
-                  {ipo.subscriptionStart.slice(5)} ~ {ipo.subscriptionEnd.slice(5)}
-                </span>
-                <span>
-                  <span className="text-slate-400">상장 </span>
-                  {ipo.listingDate.slice(5)}
-                </span>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                {ipo.subscriptionStart ? (
+                  <>
+                    <span><span className="text-slate-400">청약 </span>{ipo.subscriptionStart.slice(5)} ~ {ipo.subscriptionEnd.slice(5)}</span>
+                    {ipo.listingDate && <span><span className="text-slate-400">상장 </span>{ipo.listingDate.slice(5)}</span>}
+                  </>
+                ) : (
+                  <span><span className="text-slate-400">공시 </span>{ipo.filedAt ?? '-'}</span>
+                )}
               </div>
 
               {/* 공모가 / 주관사 */}
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-slate-600">
-                  <span className="text-slate-400">공모가 </span>
-                  <span className="font-semibold text-slate-800">
-                    {ipo.priceMin.toLocaleString()}~{ipo.priceMax.toLocaleString()}원
-                  </span>
-                </span>
-                <div className="flex gap-1 flex-wrap justify-end max-w-[55%]">
-                  {ipo.brokers.map(b => (
-                    <span key={b} className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
-                      {b}
+              {(ipo.priceMin > 0 || ipo.brokers.length > 0) && (
+                <div className="flex items-center justify-between gap-2">
+                  {ipo.priceMin > 0 && (
+                    <span className="text-[11px] text-slate-600">
+                      <span className="text-slate-400">공모가 </span>
+                      <span className="font-semibold text-slate-800">
+                        {ipo.priceMin === ipo.priceMax
+                          ? `${ipo.priceMin.toLocaleString()}원`
+                          : `${ipo.priceMin.toLocaleString()}~${ipo.priceMax.toLocaleString()}원`}
+                      </span>
                     </span>
-                  ))}
+                  )}
+                  {ipo.brokers.length > 0 && (
+                    <div className="flex gap-1 flex-wrap justify-end">
+                      {ipo.brokers.slice(0, 3).map(b => (
+                        <span key={b} className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
+                          {b}
+                        </span>
+                      ))}
+                      {ipo.brokers.length > 3 && (
+                        <span className="text-[10px] text-slate-400">+{ipo.brokers.length - 3}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
+
+              {/* 경쟁률 / 배정 통계 */}
+              {hasStats && (
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100">
+                  <StatItem label="경쟁률" value={ipo.competitionRatio ? `${ipo.competitionRatio}:1` : undefined} />
+                  <StatItem label="비례배정경쟁률" value={ipo.proportionalRatio ? `${ipo.proportionalRatio}:1` : undefined} />
+                  <StatItem label="균등배정예상수주" value={ipo.equalAllocExpected} />
+                  <StatItem label="배정물량" value={ipo.allocatedQty ? Number(ipo.allocatedQty).toLocaleString() : undefined} />
+                  <StatItem label="총 청약자수" value={ipo.totalSubscribers ? Number(ipo.totalSubscribers).toLocaleString() + '명' : undefined} />
+                  <StatItem label="총 청약수량" value={ipo.totalSubscriptionQty ? Number(ipo.totalSubscriptionQty).toLocaleString() : undefined} />
+                </div>
+              )}
+
+              {/* 상세 없음 안내 */}
+              {!ipo.hasDetail && (
+                <p className="text-[10px] text-slate-300">{ipo.reportName}</p>
+              )}
             </div>
           )
         })}
 
-        {/* DART API 연동 안내 */}
         <p className="text-center text-[10px] text-slate-300 pt-1">
-          DART OpenAPI 연동 시 실시간 공모주 일정으로 자동 업데이트됩니다
+          DART OpenAPI · 지분증권 공모 · 최근 90일
         </p>
       </div>
     </div>

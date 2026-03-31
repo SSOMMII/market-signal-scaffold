@@ -1,9 +1,35 @@
-'use client'
-import { useState } from 'react'
+﻿'use client'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeftIcon, SparklesIcon } from '@/components/icons'
 import { useMarket } from '@/context/MarketContext'
 import { tabs, krDetailData, usDetailData, aiReportTabs } from '@/lib/detailData'
+
+type DetailApiResponse = {
+  predictionTitle: string
+  predictionPct: number
+  predictionSub: string
+  stats: { label: string; value: string }[]
+  etfDetailList: {
+    ticker: string
+    name: string
+    price: string
+    change: string
+    volume: string
+    signal: string
+    score: number
+    up: boolean
+  }[]
+  indicatorDetail: {
+    label: string
+    value: number
+    max: number
+    badge: string
+    cls: string
+    desc: string
+    color: string
+  }[]
+}
 
 export default function DetailPage() {
   const { market } = useMarket()
@@ -12,12 +38,63 @@ export default function DetailPage() {
 
   const [activeTab, setActiveTab] = useState(0)
   const [reportTab, setReportTab] = useState(0)
+  const [detailApiData, setDetailApiData] = useState<DetailApiResponse | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   const today = new Date().toLocaleDateString('ko-KR', {
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).replace(/\. /g, '.').replace('.', '.')
 
   const accentBg = isKr ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-violet-600 hover:bg-violet-700'
+  useEffect(() => {
+    let cancelled = false
+    setDetailLoading(true)
+    setDetailError(null)
+
+    fetch(`/api/detail?market=${market}`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(text || res.statusText || 'API 오류')
+        }
+        return res.json()
+      })
+      .then((payload) => {
+        if (cancelled) return
+        if (payload?.data) {
+          setDetailApiData(payload.data)
+        } else {
+          throw new Error('데이터 응답이 없습니다.')
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setDetailError(err.message ?? '알 수 없는 오류')
+      })
+      .finally(() => {
+        if (cancelled) return
+        setDetailLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [market])
+
+  const summaryTitle = detailApiData?.predictionTitle ?? d.predictionTitle
+  const summaryPct = detailApiData?.predictionPct ?? d.predictionPct
+  const summarySub = detailApiData?.predictionSub ?? d.predictionSub
+  const summaryStats = detailApiData?.stats ?? d.stats
+  const etfDetailList = detailApiData?.etfDetailList ?? d.etfDetailList
+  const indicatorDetail = detailApiData?.indicatorDetail ?? d.indicatorDetail
+  const [currentEtfPage, setCurrentEtfPage] = useState(1)
+  const PAGE_SIZE = 6
+  const totalEtfPages = Math.max(1, Math.ceil(etfDetailList.length / PAGE_SIZE))
+  useEffect(() => {
+    setCurrentEtfPage(1)
+  }, [etfDetailList.length])
+  const paginatedEtfs = useMemo(() => {
+    const start = (currentEtfPage - 1) * PAGE_SIZE
+    return etfDetailList.slice(start, start + PAGE_SIZE)
+  }, [currentEtfPage, etfDetailList])
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
@@ -29,9 +106,16 @@ export default function DetailPage() {
         </Link>
         <div>
           <h1 className="text-xl font-bold text-slate-900">상세 분석</h1>
-          <p className="text-xs text-slate-400">{isKr ? '국장 → 미장 심층 리포트' : '미장 → 국장 심층 리포트'}</p>
+          <p className="text-xs text-slate-400">{isKr ? '한국 시장 AI 예측 요약 보기' : 'US market AI overview 전환'}</p>
         </div>
       </div>
+
+      {detailLoading && (
+        <div className="text-xs text-slate-500">API에서 데이터를 불러오는 중입니다...</div>
+      )}
+      {detailError && (
+        <div className="text-xs text-rose-500">API 오류: {detailError}</div>
+      )}
 
       {/* Prediction Summary Banner */}
       <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-r ${d.gradientClass} p-6 text-white`}>
@@ -41,14 +125,14 @@ export default function DetailPage() {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <SparklesIcon />
-              <span className="text-xs font-semibold opacity-70">AI 예측 분석 · {today}</span>
+            <span className="text-xs font-semibold opacity-70">AI 신호 요약 {today}</span>
             </div>
-            <h2 className="text-2xl font-bold">{d.predictionTitle}</h2>
+            <h2 className="text-2xl font-bold">{summaryTitle}</h2>
             <p className="text-sm opacity-80 leading-relaxed max-w-md whitespace-pre-line">
-              {d.predictionSub}
+              {summarySub}
             </p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
-              {d.stats.map(({ label, value }) => (
+              {summaryStats.map(({ label, value }) => (
                 <div key={label} className="rounded-xl bg-white/10 px-3 py-2 text-center">
                   <p className="text-[10px] opacity-60">{label}</p>
                   <p className="text-sm font-bold">{value}</p>
@@ -57,8 +141,8 @@ export default function DetailPage() {
             </div>
           </div>
           <div className="hidden md:flex flex-col items-center justify-center h-28 w-28 rounded-full bg-white/10 border-4 border-white/20 shrink-0">
-            <p className="text-3xl font-black">{d.predictionPct}%</p>
-            <p className="text-[10px] opacity-60 text-center leading-tight">상승<br/>예측</p>
+            <p className="text-3xl font-black">{summaryPct}%</p>
+            <p className="text-[10px] opacity-60 text-center leading-tight">하락<br/>상승</p>
           </div>
         </div>
         {/* Progress bar */}
@@ -67,7 +151,7 @@ export default function DetailPage() {
             <span>하락</span><span>상승</span>
           </div>
           <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
-            <div className="h-full rounded-full bg-white/80 transition-all duration-700" style={{ width: `${d.predictionPct}%` }} />
+            <div className="h-full rounded-full bg-white/80 transition-all duration-700" style={{ width: `${summaryPct}%` }} />
           </div>
         </div>
       </div>
@@ -96,15 +180,15 @@ export default function DetailPage() {
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-slate-900">ETF 시그널 목록</h3>
-                <p className="text-xs text-slate-400">AI 점수 기반 추천 순위</p>
+                <h3 className="font-bold text-slate-900">ETF 신호 목록</h3>
+                <p className="text-xs text-slate-400">AI 평가로 선별된 ETF 순위</p>
               </div>
-              <span className="badge-up">실시간</span>
+              <span className="badge-up">신호</span>
             </div>
 
-            {/* Mobile: 카드 목록 */}
+            {/* Mobile: 移대뱶 紐⑸줉 */}
             <div className="md:hidden divide-y divide-slate-100">
-              {d.etfDetailList.map(({ ticker, name, price, change, volume, signal, score, up }) => (
+              {paginatedEtfs.map(({ ticker, name, price, change, volume, signal, score, up }) => (
                 <div key={ticker} className="p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -112,7 +196,7 @@ export default function DetailPage() {
                       <p className="text-[10px] text-slate-400 mt-0.5">{ticker} · 거래량 {volume}</p>
                     </div>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
-                      signal === '매수' ? 'bg-emerald-50 text-emerald-600' :
+                      signal === '留ㅼ닔' ? 'bg-emerald-50 text-emerald-600' :
                       signal === '관망' ? 'bg-slate-100 text-slate-500' :
                       'bg-amber-50 text-amber-600'
                     }`}>{signal}</span>
@@ -137,12 +221,12 @@ export default function DetailPage() {
               ))}
             </div>
 
-            {/* Desktop: 테이블 */}
+            {/* Desktop: 데스크탑 보기 */}
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100">
-                    {['ETF', '현재가', '등락률', '거래량', 'AI Score', '시그널'].map((h) => (
+                    {['ETF', '현재가', '변동률', '거래량', 'AI Score', '신호'].map((h) => (
                       <th key={h} className="px-4 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
                         {h}
                       </th>
@@ -150,7 +234,7 @@ export default function DetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {d.etfDetailList.map(({ ticker, name, price, change, volume, signal, score, up }) => (
+                  {paginatedEtfs.map(({ ticker, name, price, change, volume, signal, score, up }) => (
                     <tr key={ticker} className="hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3">
                         <p className="font-semibold text-slate-900 text-sm leading-tight">{name}</p>
@@ -174,7 +258,7 @@ export default function DetailPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-                          signal === '매수' ? 'bg-emerald-50 text-emerald-600' :
+                          signal === '留ㅼ닔' ? 'bg-emerald-50 text-emerald-600' :
                           signal === '관망' ? 'bg-slate-100 text-slate-500' :
                           'bg-amber-50 text-amber-600'
                         }`}>{signal}</span>
@@ -186,14 +270,14 @@ export default function DetailPage() {
             </div>
           </div>
 
-          {/* Technical Indicators Detail */}
+            {/* Technical Indicators Detail */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div className="px-5 pt-5 pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900">기술적 지표 상세</h3>
-              <p className="text-xs text-slate-400">각 지표별 현재 신호 및 해석</p>
+              <h3 className="font-bold text-slate-900">최근 지표 요약</h3>
+              <p className="text-xs text-slate-400">등락 지표를 한눈에 확인하세요</p>
             </div>
             <div className="p-5 space-y-4">
-              {d.indicatorDetail.map(({ label, value, max, badge, cls, desc, color }) => (
+              {indicatorDetail.map(({ label, value, max, badge, cls, desc, color }) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-4">
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-semibold text-slate-800 text-sm">{label}</p>
@@ -210,6 +294,23 @@ export default function DetailPage() {
               ))}
             </div>
           </div>
+          <div className="flex items-center justify-between px-5 pb-5 pt-4 text-xs text-slate-500">
+            <button
+              className="rounded-full border border-slate-200 px-3 py-1 transition-colors hover:border-slate-300 disabled:opacity-40"
+              onClick={() => setCurrentEtfPage((p) => Math.max(1, p - 1))}
+              disabled={currentEtfPage === 1}
+            >
+              이전
+            </button>
+            <span>{currentEtfPage} / {totalEtfPages}</span>
+            <button
+              className="rounded-full border border-slate-200 px-3 py-1 transition-colors hover:border-slate-300 disabled:opacity-40"
+              onClick={() => setCurrentEtfPage((p) => Math.min(totalEtfPages, p + 1))}
+              disabled={currentEtfPage === totalEtfPages}
+            >
+              다음
+            </button>
+          </div>
         </div>
 
         {/* Right column */}
@@ -218,8 +319,8 @@ export default function DetailPage() {
           {/* Sector Heatmap */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div className="px-5 pt-5 pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900">섹터별 강도</h3>
-              <p className="text-xs text-slate-400">AI 섹터 스코어 (0~100)</p>
+              <h3 className="font-bold text-slate-900">섹터 히트맵</h3>
+              <p className="text-xs text-slate-400">AI 점수 (0~100)</p>
             </div>
             <div className="p-4 space-y-3">
               {d.sectorData.map(({ name, score, change, up }) => (
@@ -246,7 +347,7 @@ export default function DetailPage() {
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center gap-2">
               <SparklesIcon />
-              <h3 className="font-bold text-slate-900 text-sm">AI 투자 리포트</h3>
+              <h3 className="font-bold text-slate-900 text-sm">AI 리포트</h3>
             </div>
 
             {/* Report type tabs */}
@@ -272,7 +373,7 @@ export default function DetailPage() {
               <Link href="/history"
                 className={`flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-white transition-colors ${accentBg}`}>
                 <SparklesIcon />
-                새 리포트 생성
+                AI 리포트 생성
               </Link>
             </div>
           </div>
@@ -281,3 +382,4 @@ export default function DetailPage() {
     </div>
   )
 }
+
