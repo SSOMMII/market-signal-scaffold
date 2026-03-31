@@ -566,15 +566,15 @@ def engineer_features(df: pd.DataFrame, cross: pd.DataFrame, earnings_dates: dic
         g["rsi_accel"] = g["rsi"].diff(1)  # RSI 변화율 (모멘텀)
         
         # RSI 다이버전스 신호 (가격과 RSI의 방향성 차이)
-        price_trend = g["close"].pct_change(5)  # 5일 가격 추세
-        rsi_trend = g["rsi"].pct_change(5)      # 5일 RSI 추세
+        price_trend = g["close"].pct_change(5, fill_method=None)  # 5일 가격 추세
+        rsi_trend = g["rsi"].pct_change(5, fill_method=None)      # 5일 RSI 추세
         g["rsi_divergence"] = ((price_trend > 0) & (rsi_trend < 0)).astype(int) - ((price_trend < 0) & (rsi_trend > 0)).astype(int)
 
         # ⑦ 스토캐스틱 모멘텀 개선
         g["stoch_accel"] = g["stoch_k"].diff(1)  # 스토캐스틱 변화율
         
         # 스토캐스틱 다이버전스 (가격과 스토캐스틱의 방향성 차이)
-        stoch_trend = g["stoch_k"].pct_change(5)
+        stoch_trend = g["stoch_k"].pct_change(5, fill_method=None)
         g["stoch_divergence"] = ((price_trend > 0) & (stoch_trend < 0)).astype(int) - ((price_trend < 0) & (stoch_trend > 0)).astype(int)
 
         # ⑥ SMA 대비 위치 (%)
