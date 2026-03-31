@@ -12,6 +12,7 @@ import {
   ChevronRightIcon,
 } from '@/components/icons'
 import { GeoRiskPanel } from '@/components/GeoRiskPanel'
+import { IpoPanel } from '@/components/IpoPanel'
 
 // ── 포맷 헬퍼 ──────────────────────────────────────────────────────────
 function fmt0(v: number | null) { return v ? Math.round(v).toLocaleString() : '-' }
@@ -534,79 +535,14 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Portfolio */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
-            <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors duration-300 ${isKr ? 'bg-indigo-50 text-indigo-600' : 'bg-violet-50 text-violet-600'}`}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect width="20" height="14" x="2" y="7" rx="2" ry="2"/>
-                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-900">내 포트폴리오</h3>
-                  <p className="text-xs text-slate-400">Risk Score: 65/100</p>
-                </div>
-              </div>
-              <span className="badge-hold text-[10px]">보통</span>
-            </div>
-            <div className="px-5 py-3">
-              <div className="flex rounded-full overflow-hidden h-2 gap-0.5">
-                {d.portfolio.map(({ code, pct, color }) => (
-                  <div key={code} className={`${color} h-full rounded-full`} style={{ width: `${pct}%` }} />
-                ))}
-              </div>
-              <div className="flex justify-between mt-1.5">
-                {d.portfolio.map(({ code, color }) => (
-                  <div key={code} className="flex items-center gap-1">
-                    <span className={`inline-block h-2 w-2 rounded-full ${color}`} />
-                    <span className="text-[9px] font-medium text-slate-500">{code}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="px-4 pb-4 space-y-2">
-              {d.portfolio.map(({ code, name, pct, color, profit }) => {
-                const up = profit.startsWith('+')
-                return (
-                  <div key={code} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className={`h-8 w-8 rounded-full ${color} flex items-center justify-center text-xs font-bold text-white`}>
-                        {code.slice(0, 1)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">{code}</p>
-                        <p className="text-[10px] text-slate-400">{name}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-bold text-slate-700">{pct}%</p>
-                      <p className={`text-xs font-semibold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{profit}</p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          {/* TODO: 내 포트폴리오 — 실제 사용자 포트폴리오 DB 연동 후 활성화 */}
+          {/* <div className="bg-white rounded-xl border border-slate-200 shadow-sm"> ... </div> */}
 
-          {/* AI Report CTA */}
-          <div className={`bg-gradient-to-br ${d.gradientFrom} ${d.gradientTo} rounded-xl p-5 text-white transition-all duration-300`}>
-            <div className="flex items-center gap-2 mb-2">
-              <SparklesIcon />
-              <p className="text-sm font-semibold">AI 투자 리포트</p>
-            </div>
-            <p className="text-xs text-white/70 leading-relaxed mb-4">
-              {isKr
-                ? '오늘의 국내 시장 데이터를 기반으로 맞춤형 AI 투자 분석 리포트를 생성합니다.'
-                : '미국 시장 데이터를 기반으로 내일 국장 예측 리포트를 생성합니다.'}
-            </p>
-            <Link href="/detail"
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-white/20 hover:bg-white/30 py-2.5 text-sm font-semibold transition-colors">
-              리포트 보기 <ArrowRightIcon />
-            </Link>
-          </div>
+          {/* TODO: AI 투자 리포트 CTA — detail 페이지 실데이터 연동 후 활성화 */}
+          {/* <div className={`bg-gradient-to-br ...`}> ... </div> */}
+
+          {/* 공모주 캘린더 */}
+          <IpoPanel />
         </div>
       </div>
     </div>
