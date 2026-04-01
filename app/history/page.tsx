@@ -12,7 +12,6 @@ import { useMarket } from '@/context/MarketContext';
 import {
   filterOptions,
   statCards as defaultStatCards,
-  predictions as mockPredictions,
 } from '@/lib/historyData';
 import type { Prediction } from '@/lib/historyData';
 
@@ -20,9 +19,9 @@ export default function HistoryPage() {
   const { market } = useMarket();
   const [filter, setFilter] = useState(0);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
-  const [predictions, setPredictions] = useState<Prediction[]>(mockPredictions);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [statCardsData, setStatCardsData] = useState(defaultStatCards);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,15 +61,16 @@ export default function HistoryPage() {
   }, [market]);
 
   const filtered = predictions.filter((p) => {
-    if (filter === 1) return p.hit;
-    if (filter === 2) return !p.hit;
+    if (filter === 1) return p.hit === true;
+    if (filter === 2) return p.hit === false;
     return true;
   });
 
-  const totalHits = predictions.filter((p) => p.hit).length;
+  const verifiable = predictions.filter((p) => p.hit !== null);
+  const totalHits = verifiable.filter((p) => p.hit === true).length;
   const accuracy =
-    predictions.length > 0
-      ? Math.round((totalHits / predictions.length) * 100)
+    verifiable.length > 0
+      ? Math.round((totalHits / verifiable.length) * 100)
       : 0;
 
   return (
@@ -89,11 +89,6 @@ export default function HistoryPage() {
         </div>
       </div>
 
-      {loading && (
-        <p className="text-xs text-slate-500 italic">
-          API에서 예측 이력을 불러오는 중입니다...
-        </p>
-      )}
       {error && (
         <p className="text-xs text-rose-500 font-medium px-2 py-1 bg-rose-50 rounded">
           오류: {error}
@@ -102,23 +97,34 @@ export default function HistoryPage() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {statCardsData.map(({ label, value, sub, color, bg }) => (
-          <div
-            key={label}
-            className="bg-white rounded-xl border border-slate-200 shadow-sm p-4"
-          >
-            <div
-              className={`inline-flex h-9 w-9 items-center justify-center rounded-xl ${bg} ${color} mb-3`}
-            >
-              <SparklesIcon />
+        {loading ? (
+          [0, 1, 2, 3].map((i) => (
+            <div key={i} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 animate-pulse">
+              <div className="h-9 w-9 rounded-xl bg-slate-100 mb-3" />
+              <div className="h-8 w-16 rounded bg-slate-100 mb-2" />
+              <div className="h-4 w-24 rounded bg-slate-100 mb-1" />
+              <div className="h-3 w-20 rounded bg-slate-100" />
             </div>
-            <p className={`text-2xl font-black ${color}`}>{value}</p>
-            <p className="text-sm font-semibold text-slate-700 mt-0.5">
-              {label}
-            </p>
-            <p className="text-[10px] text-slate-400 mt-0.5">{sub}</p>
-          </div>
-        ))}
+          ))
+        ) : (
+          statCardsData.map(({ label, value, sub, color, bg }) => (
+            <div
+              key={label}
+              className="bg-white rounded-xl border border-slate-200 shadow-sm p-4"
+            >
+              <div
+                className={`inline-flex h-9 w-9 items-center justify-center rounded-xl ${bg} ${color} mb-3`}
+              >
+                <SparklesIcon />
+              </div>
+              <p className={`text-2xl font-black ${color}`}>{value}</p>
+              <p className="text-sm font-semibold text-slate-700 mt-0.5">
+                {label}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{sub}</p>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Accuracy Gauge */}
@@ -155,11 +161,11 @@ export default function HistoryPage() {
             .map((p, i) => (
               <div
                 key={`dot-${p.date}-${i}`}
-                title={`${p.date} 결과: ${p.hit ? '적중' : '빗나감'}`}
-                className={`h-4 w-4 shrink-0 rounded-full flex items-center justify-center text-white ${p.hit ? 'bg-emerald-500' : 'bg-red-400'}`}
+                title={`${p.date} 결과: ${p.hit === null ? '미검증' : p.hit ? '적중' : '빗나감'}`}
+                className={`h-4 w-4 shrink-0 rounded-full flex items-center justify-center text-white ${p.hit === true ? 'bg-emerald-500' : p.hit === false ? 'bg-red-400' : 'bg-slate-300'}`}
               >
                 <div className="w-2.5 h-2.5 flex items-center justify-center">
-                  {p.hit ? <CheckIcon /> : <XIcon />}
+                  {p.hit === true ? <CheckIcon /> : p.hit === false ? <XIcon /> : null}
                 </div>
               </div>
             ))}
@@ -200,9 +206,9 @@ export default function HistoryPage() {
               >
                 {/* Hit indicator */}
                 <div
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${p.hit ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${p.hit === true ? 'bg-emerald-100 text-emerald-600' : p.hit === false ? 'bg-red-100 text-red-500' : 'bg-slate-100 text-slate-400'}`}
                 >
-                  {p.hit ? <CheckIcon /> : <XIcon />}
+                  {p.hit === true ? <CheckIcon /> : p.hit === false ? <XIcon /> : <span className="text-[10px] font-bold">?</span>}
                 </div>
 
                 <div className="flex-1 min-w-0">
@@ -223,18 +229,24 @@ export default function HistoryPage() {
                       className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
                         p.actual === '상승'
                           ? 'bg-indigo-50 text-indigo-600'
-                          : 'bg-slate-100 text-slate-600'
+                          : p.actual === '하락'
+                          ? 'bg-slate-100 text-slate-600'
+                          : 'bg-slate-50 text-slate-400'
                       }`}
                     >
-                      실제: {p.actual}
+                      실제: {p.actual ?? '미검증'}
                     </span>
-                    {p.hit ? (
+                    {p.hit === true ? (
                       <span className="bg-emerald-500 text-white text-[9px] px-1.5 py-0.5 rounded font-bold">
                         적중
                       </span>
-                    ) : (
+                    ) : p.hit === false ? (
                       <span className="bg-slate-400 text-white text-[9px] px-1.5 py-0.5 rounded font-bold">
                         빗나감
+                      </span>
+                    ) : (
+                      <span className="bg-slate-200 text-slate-500 text-[9px] px-1.5 py-0.5 rounded font-bold">
+                        미검증
                       </span>
                     )}
                   </div>

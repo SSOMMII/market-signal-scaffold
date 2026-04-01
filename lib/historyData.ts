@@ -2,11 +2,11 @@ export type Prediction = {
   date: string
   direction: '상승' | '하락'
   confidence: number
-  actual: '상승' | '하락'
+  actual: '상승' | '하락' | null
   kospiActual: string
   nasdaqActual: string
   foreignBuy: string
-  hit: boolean
+  hit: boolean | null
   summary: string
 }
 
