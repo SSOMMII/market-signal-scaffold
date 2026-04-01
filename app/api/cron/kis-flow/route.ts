@@ -39,34 +39,35 @@ export async function GET(req: NextRequest) {
   const todayStr = yyyymmdd(today)
 
   try {
-    // 코스피 + 코스닥 외국인 순매수 거래대금(원) 조회
-    const [kospiRaw, kosdaqRaw] = await Promise.all([
-      getKisMarketInvestorFlow('J', todayStr, todayStr),
-      getKisMarketInvestorFlow('Q', todayStr, todayStr),
-    ])
+    // 코스피(KODEX200) + 코스닥(KOSDAQ150) ETF 수급으로 시장 외국인 순매수 proxy 조회
+    // KIS 계정에 따라 investor flow tr_id가 미지원될 수 있으므로 각각 try-catch
+    let kospiNetBuy: number | null = null
+    let kosdaqNetBuy: number | null = null
 
-    const kospiRow = kospiRaw?.output1?.[0]
-    const kosdaqRow = kosdaqRaw?.output1?.[0]
+    try {
+      const kospiRaw = await getKisMarketInvestorFlow('J', todayStr, todayStr)
+      const row = kospiRaw?.output1?.[0]
+      const val = row?.frgn_ntby_tr_pbmn ?? row?.frgn_ntby_qty
+      if (val != null) kospiNetBuy = parseFloat(val)
+    } catch { /* KIS 수급 미지원 시 무시 */ }
 
-    // frgn_ntby_tr_pbmn: 외국인 순매수 거래대금 (원)
-    const kospiNetBuy = kospiRow?.frgn_ntby_tr_pbmn != null
-      ? parseFloat(kospiRow.frgn_ntby_tr_pbmn)
-      : null
-    const kosdaqNetBuy = kosdaqRow?.frgn_ntby_tr_pbmn != null
-      ? parseFloat(kosdaqRow.frgn_ntby_tr_pbmn)
-      : null
+    try {
+      const kosdaqRaw = await getKisMarketInvestorFlow('Q', todayStr, todayStr)
+      const row = kosdaqRaw?.output1?.[0]
+      const val = row?.frgn_ntby_tr_pbmn ?? row?.frgn_ntby_qty
+      if (val != null) kosdaqNetBuy = parseFloat(val)
+    } catch { /* KIS 수급 미지원 시 무시 */ }
 
     if (kospiNetBuy === null && kosdaqNetBuy === null) {
       return NextResponse.json({
-        ok: false,
-        reason: 'KIS returned no foreign flow data',
-        kospiRaw,
-        kosdaqRaw,
+        ok: true,
+        skipped: true,
+        reason: 'KIS investor flow not supported for this API key — no data written',
       })
     }
 
     const netBuy = (kospiNetBuy ?? 0) + (kosdaqNetBuy ?? 0)
-    const asOfDate = kospiRow?.stck_bsop_date ?? todayStr
+    const asOfDate = todayStr
 
     // YYYYMMDD → YYYY-MM-DD
     const asOfDateFormatted = `${asOfDate.slice(0, 4)}-${asOfDate.slice(4, 6)}-${asOfDate.slice(6, 8)}`

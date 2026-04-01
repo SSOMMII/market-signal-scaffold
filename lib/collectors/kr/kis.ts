@@ -190,31 +190,17 @@ export async function getKisEtfInvestorFlow(symbol: string) {
 }
 
 /**
- * 국내 시장 전체 투자자별 매매 동향 (외국인/기관/개인 순매수)
- * 코스피 또는 코스닥 시장 전체 기준 외국인 순매수 거래대금(원) 반환
- * @param market 'J' = 코스피, 'Q' = 코스닥
- * @param startDate YYYYMMDD
- * @param endDate YYYYMMDD
+ * 시장 전체 외국인 순매수 proxy
+ * KIS에 시장 전체 집계 endpoint가 없으므로 대표 ETF(KODEX200 / KOSDAQ150) 수급으로 대체
+ * @param market 'J' = 코스피(KODEX200 069500), 'Q' = 코스닥(KODEX KOSDAQ150 229200)
  */
 export async function getKisMarketInvestorFlow(
   market: 'J' | 'Q',
-  startDate: string,
-  endDate: string,
+  _startDate: string,
+  _endDate: string,
 ) {
-  const token = await getKisToken()
-  const params = new URLSearchParams({
-    FID_COND_MRKT_DIV_CODE: market,
-    FID_INPUT_DATE_1: startDate,
-    FID_INPUT_DATE_2: endDate,
-  })
-
-  const res = await fetch(
-    `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor-trend-total?${params}`,
-    { headers: kisHeaders(token, 'FHKST03030100') },
-  )
-
-  if (!res.ok) throw new Error(`KIS market investor flow error ${res.status}`)
-  return res.json()
+  const etfCode = market === 'J' ? '069500' : '229200'
+  return getKisEtfInvestorFlow(etfCode)
 }
 
 /**
