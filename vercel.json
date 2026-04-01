@@ -17,10 +17,6 @@
       "schedule": "0 7 * * 1-5"
     },
     {
-      "path": "/api/cron/kis-flow",
-      "schedule": "10 7 * * 1-5"
-    },
-    {
       "path": "/api/cron/ecos",
       "schedule": "30 7 * * 1-5"
     },

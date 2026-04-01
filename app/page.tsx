@@ -97,27 +97,21 @@ export default function DashboardPage() {
   const [index2Rows, setIndex2Rows] = useState<Record<string, any>[]>([])
   const [realSignals, setRealSignals] = useState<RealSignalItem[] | null>(null)
   const [foreignFlow, setForeignFlow] = useState<{ net_buy_str: string } | null>(null)
-  const [globalLoading, setGlobalLoading] = useState(true)
-  const [marketLoading, setMarketLoading] = useState(true)
-  const [signalsLoading, setSignalsLoading] = useState(true)
 
   useEffect(() => {
     fetch('/api/global-indicators')
       .then(r => r.json())
       .then(({ data }) => { if (data) setGlobalSnap(data) })
       .catch(() => {})
-      .finally(() => setGlobalLoading(false))
   }, [])
 
   useEffect(() => {
     const symbol = isKr ? '^KS11' : '^GSPC'
     setActiveRows([])
-    setMarketLoading(true)
     fetch(`/api/market-summary?symbol=${symbol}`)
       .then(r => r.json())
       .then(({ data }) => { if (data?.length) setActiveRows(data) })
       .catch(() => {})
-      .finally(() => setMarketLoading(false))
   }, [isKr])
 
   useEffect(() => {
@@ -130,12 +124,10 @@ export default function DashboardPage() {
   }, [isKr])
 
   useEffect(() => {
-    setSignalsLoading(true)
     fetch(`/api/signals?market=${isKr ? 'kr' : 'us'}`)
       .then(r => r.json())
       .then(({ data }) => { if (data?.length) setRealSignals(data) })
       .catch(() => {})
-      .finally(() => setSignalsLoading(false))
   }, [isKr])
 
   useEffect(() => {
@@ -283,19 +275,13 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-6">
           <div className="hidden sm:flex items-center gap-4">
-            {globalLoading ? (
-              [0, 1, 2].map((i) => (
-                <div key={i} className="animate-pulse w-14 h-10 rounded bg-slate-100" />
-              ))
-            ) : (
-              (realStripPreview ?? d.stripPreview).map((idx) => (
-                <div key={idx.name} className="text-center">
-                  <p className="text-[10px] text-slate-400 font-medium">{idx.name}</p>
-                  <p className="text-sm font-bold text-slate-900">{idx.value}</p>
-                  <p className={`text-xs font-semibold ${idx.up ? 'text-emerald-500' : 'text-red-500'}`}>{idx.change}</p>
-                </div>
-              ))
-            )}
+            {(realStripPreview ?? d.stripPreview).map((idx) => (
+              <div key={idx.name} className="text-center">
+                <p className="text-[10px] text-slate-400 font-medium">{idx.name}</p>
+                <p className="text-sm font-bold text-slate-900">{idx.value}</p>
+                <p className={`text-xs font-semibold ${idx.up ? 'text-emerald-500' : 'text-red-500'}`}>{idx.change}</p>
+              </div>
+            ))}
           </div>
           <div className={`rounded-xl px-4 py-2 text-center transition-colors duration-300 ${isKr ? 'bg-indigo-50' : 'bg-violet-50'}`}>
             <p className="text-[10px] text-slate-400">장 상태</p>
@@ -383,13 +369,6 @@ export default function DashboardPage() {
           </div>
 
           {/* Index Charts */}
-          {marketLoading ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              {[0, 1].map((i) => (
-                <div key={i} className="animate-pulse bg-white rounded-xl border border-slate-200 shadow-sm p-5 h-52" />
-              ))}
-            </div>
-          ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {[realIndex1, realIndex2 ?? d.index2].map((idx) => (
               <div key={idx.name} className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 transition-all duration-300">
@@ -424,7 +403,6 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-          )}
 
           {/* Technical Indicators */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
@@ -441,11 +419,7 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="p-5 grid grid-cols-2 md:grid-cols-3 gap-3">
-              {marketLoading ? (
-                [0, 1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="animate-pulse h-20 rounded-xl bg-slate-100" />
-                ))
-              ) : (realIndicators ?? d.indicators).map(({ label, value, sub, badge, cls }) => (
+              {(realIndicators ?? d.indicators).map(({ label, value, sub, badge, cls }) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-3 hover:bg-slate-100 transition-colors">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-xs font-medium text-slate-500">{label}</p>
@@ -471,11 +445,7 @@ export default function DashboardPage() {
             }
           </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-              {globalLoading ? (
-                [0, 1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="animate-pulse rounded-xl h-16 bg-slate-100" />
-                ))
-              ) : (realGlobalStrip ?? d.globalStrip).map(({ name, value, change, up }) => (
+              {(realGlobalStrip ?? d.globalStrip).map(({ name, value, change, up }) => (
                 <div key={name} className={`rounded-xl p-3 text-center ${up ? 'bg-emerald-50' : 'bg-red-50'}`}>
                   <p className="text-[10px] text-slate-500 font-medium">{name}</p>
                   <p className="text-sm font-bold text-slate-900 mt-0.5">{value}</p>
@@ -510,11 +480,7 @@ export default function DashboardPage() {
               </Link>
             </div>
             <div className="p-4 space-y-2">
-              {signalsLoading ? (
-                [0, 1, 2, 3, 4].map((i) => (
-                  <div key={i} className="animate-pulse h-14 rounded-lg bg-slate-100" />
-                ))
-              ) : (realSignals ?? d.signals).slice(0, 5).map(({ ticker, name, change, score, action, confidence, signalStrength, up }) => {
+              {(realSignals ?? d.signals).slice(0, 5).map(({ ticker, name, change, score, action, confidence, signalStrength, up }) => {
                 const strengthColor = signalStrength?.includes('강한 매수') ? 'bg-emerald-100 text-emerald-700'
                   : signalStrength?.includes('매수') ? 'bg-emerald-50 text-emerald-600'
                   : signalStrength?.includes('관망') ? 'bg-slate-100 text-slate-600'
@@ -567,6 +533,14 @@ export default function DashboardPage() {
                 )
               })}
             </div>
+            { (realSignals ?? d.signals).length > 5 && (
+              <div className="px-4 pb-4 pt-2 text-right">
+                <Link href="/detail"
+                  className="inline-flex items-center gap-1 text-xs text-indigo-600 font-medium hover:underline">
+                  전체 보기 <ChevronRightIcon />
+                </Link>
+              </div>
+            )}
           </div>
 
           {/* TODO: 내 포트폴리오 — 실제 사용자 포트폴리오 DB 연동 후 활성화 */}

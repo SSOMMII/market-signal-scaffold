@@ -190,34 +190,6 @@ export async function getKisEtfInvestorFlow(symbol: string) {
 }
 
 /**
- * 국내 시장 전체 투자자별 매매 동향 (외국인/기관/개인 순매수)
- * 코스피 또는 코스닥 시장 전체 기준 외국인 순매수 거래대금(원) 반환
- * @param market 'J' = 코스피, 'Q' = 코스닥
- * @param startDate YYYYMMDD
- * @param endDate YYYYMMDD
- */
-export async function getKisMarketInvestorFlow(
-  market: 'J' | 'Q',
-  startDate: string,
-  endDate: string,
-) {
-  const token = await getKisToken()
-  const params = new URLSearchParams({
-    FID_COND_MRKT_DIV_CODE: market,
-    FID_INPUT_DATE_1: startDate,
-    FID_INPUT_DATE_2: endDate,
-  })
-
-  const res = await fetch(
-    `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor-trend-total?${params}`,
-    { headers: kisHeaders(token, 'FHKST03030100') },
-  )
-
-  if (!res.ok) throw new Error(`KIS market investor flow error ${res.status}`)
-  return res.json()
-}
-
-/**
  * market_master의 KR ETF 목록 전체에 대해 KIS 현재가 일괄 조회
  * @param symbols .KS 포함 심볼 배열 (예: ['069500.KS', '229200.KS'])
  * @returns symbol → 현재가/수급 데이터 맵

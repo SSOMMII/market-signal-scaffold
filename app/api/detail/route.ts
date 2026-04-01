@@ -153,7 +153,7 @@ export async function GET(req: NextRequest) {
     // 1. ETF/STOCK 목록
     const { data: masters, error: mErr } = await supabase
       .from('market_master')
-      .select('id, symbol, name, sector')
+      .select('id, symbol, name')
       .eq('market_type', marketType)
       .in('asset_type', ['ETF', 'STOCK'])
 
@@ -164,8 +164,8 @@ export async function GET(req: NextRequest) {
 
     const ids       = masters.map(m => m.id)
     const symbols   = masters.map(m => m.symbol)
-    const idToMeta: Record<number, { symbol: string; name: string; sector: string | null }> = {}
-    for (const m of masters) idToMeta[m.id] = { symbol: m.symbol, name: m.name, sector: m.sector ?? null }
+    const idToMeta: Record<number, { symbol: string; name: string }> = {}
+    for (const m of masters) idToMeta[m.id] = { symbol: m.symbol, name: m.name }
 
     // 2. 기술 지표 (ticker별 최신 2행)
     const { data: diRows } = await supabase
@@ -254,39 +254,6 @@ export async function GET(req: NextRequest) {
     }
     etfDetailList.sort((a, b) => b.score - a.score)
 
-    // 4-b. 섹터별 집계 (signal_score 평균, 변동률 평균)
-    const sectorAccum: Record<string, { scoreSum: number; changeSum: number; count: number }> = {}
-    for (const [idStr, pair] of Object.entries(grouped)) {
-      const id   = Number(idStr)
-      const meta = idToMeta[id]
-      if (!meta?.sector || !pair[0]) continue
-      const latest  = pair[0]
-      const prev    = pair[1]
-      const ai      = aiByTicker[meta.symbol]
-      const techScore = calcTechScore(latest)
-      const techNorm  = normalizeTechScore(techScore)
-      const hybridScore = ai
-        ? Math.round(TECH_WEIGHT * techNorm + AI_WEIGHT * ai.signal_score)
-        : techNorm
-      let changePct = 0
-      if (prev?.close && latest.close && prev.close !== 0) {
-        changePct = (latest.close - prev.close) / prev.close * 100
-      }
-      const sec = meta.sector
-      if (!sectorAccum[sec]) sectorAccum[sec] = { scoreSum: 0, changeSum: 0, count: 0 }
-      sectorAccum[sec].scoreSum  += hybridScore
-      sectorAccum[sec].changeSum += changePct
-      sectorAccum[sec].count     += 1
-    }
-    const sectorData = Object.entries(sectorAccum)
-      .map(([name, { scoreSum, changeSum, count }]) => {
-        const score     = Math.round(scoreSum / count)
-        const changePct = changeSum / count
-        const changeStr = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%'
-        return { name, score, change: changeStr, up: changePct >= 0 }
-      })
-      .sort((a, b) => b.score - a.score)
-
     // 5. 대표 지수 기술 지표 상세
     const repTicker = isKr ? '^KS11' : '^GSPC'
     const repRows   = await getDailyIndicatorsBySymbol(repTicker, 1)
@@ -365,7 +332,6 @@ export async function GET(req: NextRequest) {
         stats,
         etfDetailList,
         indicatorDetail,
-        sectorData,
       },
     })
   } catch (err: any) {
