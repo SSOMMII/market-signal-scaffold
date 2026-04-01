@@ -21,11 +21,11 @@ type PredictionRecord = {
   date: string;
   direction: '상승' | '하락';
   confidence: number;
-  actual: '상승' | '하락';
+  actual: '상승' | '하락' | null;
   kospiActual: string;
   nasdaqActual: string;
   foreignBuy: string;
-  hit: boolean;
+  hit: boolean | null;
   summary: string;
 };
 
@@ -68,9 +68,9 @@ function buildSummary(
   signalLabel: string | null,
   kospiActual: string,
   nasdaqActual: string,
-  hit: boolean
+  hit: boolean | null
 ): string {
-  const hitStr = hit ? '예측 적중.' : '예측 빗나감.';
+  const hitStr = hit === null ? '검증 대기.' : hit ? '예측 적중.' : '예측 빗나감.';
   if (!signalLabel)
     return `AI 시그널 분석. 코스피 ${kospiActual}, 나스닥 ${nasdaqActual}. ${hitStr}`;
   const upper = signalLabel.toUpperCase();
@@ -180,17 +180,17 @@ export async function GET(req: NextRequest) {
       // 예측 방향: score >= 50 → 상승
       const direction: '상승' | '하락' = score >= 50 ? '상승' : '하락';
 
-      // 실제 방향: 대표 종목 당일 vs 전날 비교
+      // 실제 방향: 대표 종목 당일 vs 전날 비교 (데이터 없으면 null — 통계 분모 제외)
       const repClose = repByDate[date];
       const repPrev = getPrevClose(repRows, date);
-      const actual: '상승' | '하락' =
+      const actual: '상승' | '하락' | null =
         repClose != null && repPrev != null
           ? repClose >= repPrev
             ? '상승'
             : '하락'
-          : direction; // 실제값 없으면 예측과 같다고 가정 (hit=true 방지용 임시)
+          : null;
 
-      const hit = direction === actual;
+      const hit: boolean | null = actual !== null ? direction === actual : null;
 
       const kospiActual = fmtPct(
         kospiByDate[date],
@@ -221,10 +221,11 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    // 7. Stat Cards 계산
+    // 7. Stat Cards 계산 (actual=null 인 미검증 레코드는 적중률 분모에서 제외)
     const total = predictions.length;
-    const hits = predictions.filter((p) => p.hit).length;
-    const accuracy = total > 0 ? Math.round((hits / total) * 100) : 0;
+    const verifiable = predictions.filter((p) => p.hit !== null);
+    const hits = verifiable.filter((p) => p.hit === true).length;
+    const accuracy = verifiable.length > 0 ? Math.round((hits / verifiable.length) * 100) : 0;
     const avgConf =
       total > 0
         ? Math.round(predictions.reduce((s, p) => s + p.confidence, 0) / total)
@@ -232,7 +233,7 @@ export async function GET(req: NextRequest) {
 
     let streak = 0;
     for (const p of predictions) {
-      if (p.hit) streak++;
+      if (p.hit === true) streak++;
       else break;
     }
 
