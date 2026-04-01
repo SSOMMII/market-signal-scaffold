@@ -23,6 +23,28 @@ function verifyCron(req: NextRequest): boolean {
   return req.headers.get('authorization') === `Bearer ${secret}`
 }
 
+/** KIS investor flow 응답에서 외국인 순매수를 유연하게 파싱 */
+function parseKisInvestorNetBuy(raw: any): number | null {
+  if (!raw) return null
+  // KIS API 응답 구조가 버전/계정마다 다를 수 있어 여러 경로 시도
+  const candidates = [
+    raw?.output1?.[0]?.frgn_ntby_tr_pbmn,
+    raw?.output1?.[0]?.frgn_ntby_qty,
+    raw?.output?.[0]?.frgn_ntby_tr_pbmn,
+    raw?.output?.[0]?.frgn_ntby_qty,
+    raw?.output2?.[0]?.frgn_ntby_tr_pbmn,
+    raw?.output2?.frgn_ntby_tr_pbmn,
+    raw?.output?.frgn_ntby_tr_pbmn,
+  ]
+  for (const c of candidates) {
+    if (c != null && c !== '') {
+      const n = parseFloat(String(c))
+      if (!isNaN(n)) return n
+    }
+  }
+  return null
+}
+
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -46,16 +68,12 @@ export async function GET(req: NextRequest) {
 
     try {
       const kospiRaw = await getKisMarketInvestorFlow('J', todayStr, todayStr)
-      const row = kospiRaw?.output1?.[0]
-      const val = row?.frgn_ntby_tr_pbmn ?? row?.frgn_ntby_qty
-      if (val != null) kospiNetBuy = parseFloat(val)
+      kospiNetBuy = parseKisInvestorNetBuy(kospiRaw)
     } catch { /* KIS 수급 미지원 시 무시 */ }
 
     try {
       const kosdaqRaw = await getKisMarketInvestorFlow('Q', todayStr, todayStr)
-      const row = kosdaqRaw?.output1?.[0]
-      const val = row?.frgn_ntby_tr_pbmn ?? row?.frgn_ntby_qty
-      if (val != null) kosdaqNetBuy = parseFloat(val)
+      kosdaqNetBuy = parseKisInvestorNetBuy(kosdaqRaw)
     } catch { /* KIS 수급 미지원 시 무시 */ }
 
     if (kospiNetBuy === null && kosdaqNetBuy === null) {
