@@ -1,21 +1,20 @@
 /**
  * GET /api/cron/kis-flow
- * KRX 시장 전체 외국인 순매수 수급 수집 → foreign_flow 테이블 upsert
+ * 주요 종목 기준 외국인/기관/개인 순매수 수급 수집 → foreign_flow 테이블 upsert
  *
  * 스케줄: 평일 07:10 UTC (한국시간 16:10 — KRX 장마감 후)
- * - 코스피(J) + 코스닥(Q) 외국인 순매수 거래대금을 합산해 KRX 기준으로 저장
+ * - inquire-investor (FHKST01010900) 종목별 output1[0] 합산 방식
+ * - net_buy        = 외국인 순매수 거래대금(원) 합계
+ * - futures_position = 기관 순매수 거래대금(원) 합계
+ * - program_trading  = 개인 순매수 거래대금(원) 합계
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getKisMarketInvestorFlow } from '@/lib/collectors/kr/kis'
+import { getKisInvestorFlow } from '@/lib/collectors/kr/kis'
 import { getAdminClient } from '@/lib/supabaseAdmin'
 
-function yyyymmdd(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
-}
+// 수급 집계 대상 종목 (KOSPI 대형주)
+const KR_SYMBOLS = ['005930', '000660', '035420', '035720', '005380']
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
@@ -35,52 +34,69 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  const today = new Date()
-  const todayStr = yyyymmdd(today)
-
   try {
-    // 코스피 + 코스닥 외국인 순매수 거래대금(원) 조회
-    const [kospiRaw, kosdaqRaw] = await Promise.all([
-      getKisMarketInvestorFlow('J', todayStr, todayStr),
-      getKisMarketInvestorFlow('Q', todayStr, todayStr),
-    ])
+    let totalFrgn = 0      // 외국인 순매수 거래대금 합계
+    let totalOrgn = 0      // 기관 순매수 거래대금 합계
+    let totalIndvdl = 0    // 개인 순매수 거래대금 합계
+    let asOfDate: string | null = null
+    let successCount = 0
+    const symbolResults: Record<string, string> = {}
 
-    const kospiRow = kospiRaw?.output1?.[0]
-    const kosdaqRow = kosdaqRaw?.output1?.[0]
+    for (const symbol of KR_SYMBOLS) {
+      try {
+        const raw = await getKisInvestorFlow(symbol)
+        // output1: 당일 포함 최근 영업일 배열, [0] = 당일
+        const row = raw?.output1?.[0]
 
-    // frgn_ntby_tr_pbmn: 외국인 순매수 거래대금 (원)
-    const kospiNetBuy = kospiRow?.frgn_ntby_tr_pbmn != null
-      ? parseFloat(kospiRow.frgn_ntby_tr_pbmn)
-      : null
-    const kosdaqNetBuy = kosdaqRow?.frgn_ntby_tr_pbmn != null
-      ? parseFloat(kosdaqRow.frgn_ntby_tr_pbmn)
-      : null
+        if (!row) {
+          symbolResults[symbol] = 'no data'
+          continue
+        }
 
-    if (kospiNetBuy === null && kosdaqNetBuy === null) {
+        const frgnAmt   = parseFloat(row.frgn_ntby_tr_pbmn   ?? '0') || 0
+        const orgnAmt   = parseFloat(row.orgn_ntby_tr_pbmn   ?? '0') || 0
+        const indvdlAmt = parseFloat(row.indvdl_ntby_tr_pbmn ?? '0') || 0
+
+        totalFrgn   += frgnAmt
+        totalOrgn   += orgnAmt
+        totalIndvdl += indvdlAmt
+        successCount++
+        symbolResults[symbol] = 'ok'
+
+        // 첫 번째 성공 종목의 영업일 기준으로 날짜 결정
+        if (!asOfDate && row.stck_bsop_date) {
+          const d = row.stck_bsop_date as string
+          asOfDate = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`
+        }
+      } catch (e: any) {
+        symbolResults[symbol] = e?.message ?? 'error'
+      }
+    }
+
+    if (successCount === 0) {
       return NextResponse.json({
         ok: false,
-        reason: 'KIS returned no foreign flow data',
-        kospiRaw,
-        kosdaqRaw,
+        reason: 'No investor flow data from any symbol',
+        symbolResults,
       })
     }
 
-    const netBuy = (kospiNetBuy ?? 0) + (kosdaqNetBuy ?? 0)
-    const asOfDate = kospiRow?.stck_bsop_date ?? todayStr
-
-    // YYYYMMDD → YYYY-MM-DD
-    const asOfDateFormatted = `${asOfDate.slice(0, 4)}-${asOfDate.slice(4, 6)}-${asOfDate.slice(6, 8)}`
+    // 응답 날짜 fallback: 오늘 날짜
+    if (!asOfDate) {
+      const t = new Date()
+      asOfDate = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+    }
 
     const adminClient = getAdminClient()
     const { error } = await adminClient
       .from('foreign_flow')
       .upsert(
         {
-          as_of_date: asOfDateFormatted,
-          market: 'KRX',
-          net_buy: netBuy,
-          futures_position: 0,
-          program_trading: 0,
+          as_of_date:      asOfDate,
+          market:          'KRX',
+          net_buy:         totalFrgn,
+          futures_position: totalOrgn,
+          program_trading:  totalIndvdl,
         },
         { onConflict: 'as_of_date,market' },
       )
@@ -90,11 +106,13 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({
-      ok: true,
-      as_of_date: asOfDateFormatted,
-      net_buy: netBuy,
-      kospi: kospiNetBuy,
-      kosdaq: kosdaqNetBuy,
+      ok:                   true,
+      as_of_date:           asOfDate,
+      foreign_net_buy:      totalFrgn,
+      institutional_net_buy: totalOrgn,
+      individual_net_buy:   totalIndvdl,
+      stocks_processed:     successCount,
+      symbolResults,
     })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })

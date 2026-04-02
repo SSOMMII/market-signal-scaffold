@@ -145,14 +145,13 @@ export async function GET(req: NextRequest) {
       const raw = await getKisDailyOhlcv(symbol, startDate, endDate)
       const items: any[] = raw?.output2 ?? []
 
-      // 외국인 순매수 (output1 배열의 첫 번째 행 = 당일)
+      // 외국인 순매수 거래대금(원) — output1[0] = 당일
       let foreignNetBuy: number | null = null
       try {
         const flowRaw = await getKisInvestorFlow(symbol)
         const flowToday = flowRaw?.output1?.[0]
-        if (flowToday?.frgn_ntby_qty != null) {
-          foreignNetBuy = parseFloat(flowToday.frgn_ntby_qty)
-        }
+        const amt = flowToday?.frgn_ntby_tr_pbmn ?? flowToday?.frgn_ntby_qty
+        if (amt != null) foreignNetBuy = parseFloat(amt)
       } catch { /* 수급 데이터 실패 시 무시 */ }
 
       await processOhlcv(symbol, name, 'STOCK', items, foreignNetBuy)
@@ -171,9 +170,8 @@ export async function GET(req: NextRequest) {
       try {
         const flowRaw = await getKisEtfInvestorFlow(symbol)
         const flowToday = flowRaw?.output1?.[0]
-        if (flowToday?.frgn_ntby_qty != null) {
-          foreignNetBuy = parseFloat(flowToday.frgn_ntby_qty)
-        }
+        const amt = flowToday?.frgn_ntby_tr_pbmn ?? flowToday?.frgn_ntby_qty
+        if (amt != null) foreignNetBuy = parseFloat(amt)
       } catch { /* 수급 데이터 실패 시 무시 */ }
 
       await processOhlcv(symbol, name, 'ETF', items, foreignNetBuy)
