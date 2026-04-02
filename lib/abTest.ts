@@ -48,7 +48,7 @@ export function getOrAssignABVersion(userId: string | null): ABTestVersion {
     if (stored === 'A' || stored === 'B') {
       return stored
     }
-  } catch (e) {
+  } catch (_e) {
     // sessionStorage 미사용 환경 무시
   }
 
@@ -58,7 +58,7 @@ export function getOrAssignABVersion(userId: string | null): ABTestVersion {
   // 3. 저장
   try {
     sessionStorage.setItem(AB_VERSION_STORAGE_KEY, version)
-  } catch (e) {
+  } catch (_e) {
     // 저장 실패해도 계속 진행
   }
 

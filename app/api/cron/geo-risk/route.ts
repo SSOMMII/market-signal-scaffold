@@ -2,17 +2,75 @@
  * GET /api/cron/geo-risk
  * 지정학적 리스크 뉴스 주기적 수집 및 캐시 갱신
  * 스케줄: 매 2시간 (vercel.json)
+ * - OPENAI_API_KEY 설정 시: gpt-4o-mini LLM 분석
+ * - 미설정 시: 키워드 룰 기반 분석 (fallback)
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getFinnhubMarketNews } from '@/lib/collectors/us/finnhub'
 import { fetchRssNews } from '@/lib/collectors/common/rssNews'
-import { applyGeoRules } from '@/lib/collectors/common/geoRules'
+import { applyGeoRules, type GeoSignal } from '@/lib/collectors/common/geoRules'
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return true
   return req.headers.get('authorization') === `Bearer ${secret}`
+}
+
+async function analyzeWithOpenAI(headlines: string[]): Promise<GeoSignal[]> {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error('OPENAI_API_KEY not set')
+
+  const prompt = `You are a financial geopolitical risk analyst. Analyze the following news headlines and identify active geopolitical risk signals that could impact financial markets.
+
+Headlines (${headlines.length} total):
+${headlines.slice(0, 80).join('\n')}
+
+Return a JSON array of risk signals. Each signal must follow this exact schema:
+{
+  "ruleId": string (snake_case id like "war_conflict", "tariff_trade", "fed_rate", "china_risk", "energy_oil", "sanctions", "recession", "trump"),
+  "label": string (Korean label, e.g. "전쟁·분쟁", "관세·무역전쟁"),
+  "type": one of ["war","trade","monetary","energy","china","sanctions","recession"],
+  "sectors": [{"name": string (Korean), "direction": "up"|"down"|"neutral"}],
+  "reason": string (Korean, 1-2 sentences explaining market impact),
+  "matchedKeywords": string[] (up to 4 matching keywords from headlines),
+  "newsCount": number (count of related headlines),
+  "severity": "high"|"medium"|"low"
+}
+
+Only include signals with clear evidence in the headlines. Return [] if no significant risks found.
+Return ONLY valid JSON array, no markdown, no explanation.`
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 1500,
+    }),
+    signal: AbortSignal.timeout(20000),
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`OpenAI API error: ${res.status} ${err}`)
+  }
+
+  const json = await res.json()
+  const text = json.choices?.[0]?.message?.content ?? '[]'
+
+  try {
+    const signals = JSON.parse(text)
+    if (!Array.isArray(signals)) throw new Error('Not an array')
+    return signals as GeoSignal[]
+  } catch {
+    throw new Error(`Failed to parse OpenAI response: ${text.slice(0, 200)}`)
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -34,12 +92,26 @@ export async function GET(req: NextRequest) {
       rssResult.value.forEach(n => headlines.push(n.title))
     }
 
-    const signals = applyGeoRules(headlines)
+    let signals: GeoSignal[]
+    let analysisMethod: 'openai' | 'rules' = 'rules'
+
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        signals = await analyzeWithOpenAI(headlines)
+        analysisMethod = 'openai'
+      } catch (err) {
+        console.error('[cron/geo-risk] OpenAI 분석 실패, 키워드 룰로 fallback:', err)
+        signals = applyGeoRules(headlines)
+      }
+    } else {
+      signals = applyGeoRules(headlines)
+    }
 
     return NextResponse.json({
       ok: true,
       signals: signals.length,
       headlines: headlines.length,
+      analysisMethod,
       updatedAt: new Date().toISOString(),
     })
   } catch (err) {
