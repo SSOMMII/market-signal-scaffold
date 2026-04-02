@@ -5,6 +5,15 @@ import { ArrowLeftIcon, SparklesIcon } from '@/components/icons'
 import { useMarket } from '@/context/MarketContext'
 import { krGradientClass, usGradientClass } from '@/lib/detailData'
 
+const tabs = ['일간', '주간', '섹터별', '커스텀']
+const aiReportTabs = ['일간 리포트', '주간 전망', '섹터 분석', '커스텀']
+const reportContent = [
+  { title: '일간 AI 리포트', body: '당일 시장 흐름 기반 AI 분석 리포트입니다. 실데이터 연동 후 자동 생성됩니다.' },
+  { title: '주간 전망', body: '주간 기술 지표 추세 기반 전망입니다. 실데이터 연동 후 자동 생성됩니다.' },
+  { title: '섹터 분석', body: '섹터별 강도 및 순환 흐름 분석입니다. 실데이터 연동 후 자동 생성됩니다.' },
+  { title: '커스텀 리포트', body: '사용자 포트폴리오 기반 맞춤 리포트입니다. 포트폴리오 연동 후 활성화됩니다.' },
+]
+
 type DetailApiResponse = {
   predictionTitle: string
   predictionPct: number
@@ -84,6 +93,8 @@ export default function DetailPage() {
   const indicatorDetail = detailApiData?.indicatorDetail ?? []
   const sectorData = detailApiData?.sectorData ?? []
 
+  const [activeTab, setActiveTab] = useState(0)
+  const [reportTab, setReportTab] = useState(0)
   const [currentEtfPage, setCurrentEtfPage] = useState(1)
   const PAGE_SIZE = 6
   const totalEtfPages = Math.max(1, Math.ceil(etfDetailList.length / PAGE_SIZE))
@@ -156,6 +167,21 @@ export default function DetailPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Tabs */}
+      <div className="flex gap-1.5 bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
+        {tabs.map((tab, i) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(i)}
+            className={`flex-1 rounded-lg py-2 text-xs sm:text-sm font-medium transition-all ${
+              activeTab === i ? `${accentBg} text-white shadow-sm` : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
       {/* ── 탭별 레이아웃 ─────────────────────────────────────────────── */}
 
@@ -419,8 +445,8 @@ export default function DetailPage() {
               </div>
               <div className="p-4 space-y-3">
                 <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600 leading-relaxed border border-slate-100">
-                  <strong className="text-slate-900 block mb-2">{d.reportContent[reportTab].title}</strong>
-                  <p>{d.reportContent[reportTab].body}</p>
+                  <strong className="text-slate-900 block mb-2">{reportContent[reportTab].title}</strong>
+                  <p>{reportContent[reportTab].body}</p>
                 </div>
                 <Link href="/history" className={`flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-white transition-colors ${accentBg}`}>
                   <SparklesIcon />AI 리포트 생성
@@ -437,7 +463,7 @@ export default function DetailPage() {
               </div>
               <div className="p-4 space-y-3">
                 {detailLoading ? [0,1,2,3,4].map(i => <div key={i} className="animate-pulse h-8 rounded-lg bg-slate-100" />)
-                  : (detailApiData?.sectorData ?? d.sectorData).map(({ name, score, change, up }) => (
+                  : sectorData.map(({ name, score, change, up }) => (
                     <div key={name}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-medium text-slate-700">{name}</span>
@@ -467,7 +493,7 @@ export default function DetailPage() {
             </div>
             <div className="p-4 space-y-3">
               {detailLoading ? [0,1,2,3,4].map(i => <div key={i} className="animate-pulse h-8 rounded-lg bg-slate-100" />)
-                : (detailApiData?.sectorData ?? d.sectorData).map(({ name, score, change, up }) => (
+                : sectorData.map(({ name, score, change, up }) => (
                   <div key={name}>
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-slate-700">{name}</span>
@@ -565,8 +591,8 @@ export default function DetailPage() {
               </div>
               <div className="p-4 space-y-3">
                 <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600 leading-relaxed border border-slate-100">
-                  <strong className="text-slate-900 block mb-2">{d.reportContent[reportTab].title}</strong>
-                  <p>{d.reportContent[reportTab].body}</p>
+                  <strong className="text-slate-900 block mb-2">{reportContent[reportTab].title}</strong>
+                  <p>{reportContent[reportTab].body}</p>
                 </div>
                 <Link href="/history" className={`flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-white transition-colors ${accentBg}`}>
                   <SparklesIcon />AI 리포트 생성
