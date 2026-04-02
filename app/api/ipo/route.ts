@@ -1,7 +1,24 @@
 import { NextResponse } from 'next/server'
+import https from 'https'
+import crypto from 'crypto'
+
+export const runtime = 'nodejs' // https/crypto는 Node.js 전용 — Edge Runtime 방지
 
 const URL_38_LIST = 'https://www.38.co.kr/html/fund/index.htm?o=k'
 const URL_38_DETAIL = (id: string) => `https://www.38.co.kr/html/fund/index.htm?o=v&no=${id}&l=&page=1`
+
+const FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'ko-KR,ko;q=0.9',
+  'Referer': 'https://www.38.co.kr/',
+}
+
+// 38.co.kr는 구식 DH 키 사용 → @SECLEVEL=1 로 낮춰야 연결 가능
+const SSL_AGENT = new https.Agent({
+  ciphers: 'DEFAULT:@SECLEVEL=1',
+  secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
+})
 
 export interface IpoItem {
   id: string
@@ -22,20 +39,21 @@ export interface IpoItem {
 
 // ── HTML 유틸 ───────────────────────────────────────────────────────────
 
-async function fetchEucKr(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120',
-      'Referer': 'https://www.38.co.kr/',
-      'Accept': 'text/html,application/xhtml+xml',
-      'Accept-Language': 'ko-KR,ko;q=0.9',
-    },
-    next: { revalidate: 1800 },
+function fetchEucKr(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { agent: SSL_AGENT, headers: FETCH_HEADERS }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume()
+        return reject(new Error(`38.co.kr HTTP ${res.statusCode}`))
+      }
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve(new TextDecoder('euc-kr').decode(Buffer.concat(chunks))))
+      res.on('error', reject)
+    })
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('38.co.kr 요청 타임아웃')) })
+    req.on('error', reject)
   })
-  if (!res.ok) throw new Error(`38.co.kr fetch ${res.status}: ${url}`)
-  // 38.co.kr는 EUC-KR → ArrayBuffer로 받아서 직접 디코딩
-  const buffer = await res.arrayBuffer()
-  return new TextDecoder('euc-kr').decode(buffer)
 }
 
 function stripTags(html: string): string {
@@ -173,14 +191,20 @@ export async function GET() {
     const listHtml = await fetchEucKr(URL_38_LIST)
     const listItems = parseIpoList(listHtml)
 
-    // 상세 페이지 병렬 조회 (상장일, 배정 통계)
-    const details = await Promise.all(
-      listItems.map(item =>
-        fetchEucKr(URL_38_DETAIL(item.id))
-          .then(html => ({ id: item.id, ...parseIpoDetail(html) }))
-          .catch(() => ({ id: item.id, listingDate: '', equalAlloc: '', proportionalAlloc: '', totalSubscribers: '', totalSubscriptionQty: '', competitionRatio: '' }))
+    // 상세 페이지 조회 - 4개씩 청크로 나눠 병렬 처리 (과도한 동시 요청 방지)
+    const CHUNK = 4
+    const details: { id: string; listingDate: string; equalAlloc: string; proportionalAlloc: string; totalSubscribers: string; totalSubscriptionQty: string; competitionRatio: string }[] = []
+    for (let i = 0; i < listItems.length; i += CHUNK) {
+      const chunk = listItems.slice(i, i + CHUNK)
+      const chunkResults = await Promise.all(
+        chunk.map(item =>
+          fetchEucKr(URL_38_DETAIL(item.id))
+            .then(html => ({ id: item.id, ...parseIpoDetail(html) }))
+            .catch(() => ({ id: item.id, listingDate: '', equalAlloc: '', proportionalAlloc: '', totalSubscribers: '', totalSubscriptionQty: '', competitionRatio: '' }))
+        )
       )
-    )
+      details.push(...chunkResults)
+    }
     const detailMap = new Map(details.map(d => [d.id, d]))
 
     const data: IpoItem[] = listItems.map(item => {

@@ -1,0 +1,11 @@
+feat: KIS 수급 파이프라인 구축 + AI 어시스턴트 투자자별 카드 추가
+
+- KIS inquire-investor(FHKST01010900) 방식으로 외국인/기관/개인 수급 수집
+- getKisMarketInvestorFlow 제거 (존재하지 않는 엔드포인트 404)
+- output[0] 장중 빈값 스킵, frgn_ntby_tr_pbmn 백만원->원 변환 x1e6
+- daily_indicators에 orgn_net_flow, prsn_net_flow 컬럼 추가
+- foreign-flow API: net_buy=0 행 스킵 조건 추가
+- AI 어시스턴트: 국내 종목 투자자별 순매수 카드 추가
+- 상세분석: activeTab 기반 조건부 렌더링 추가 (탭별 레이아웃 분리)
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
