@@ -111,6 +111,9 @@ export async function GET(
     const signalLine = latest?.signal_line != null ? Number(latest.signal_line) : null
     const close      = latest?.close       != null ? Number(latest.close)       : null
     const sma50      = latest?.sma_50      != null ? Number(latest.sma_50)      : null
+    const frgnFlow   = latest?.foreign_net_flow != null ? Number(latest.foreign_net_flow) : null
+    const orgnFlow   = latest?.orgn_net_flow    != null ? Number(latest.orgn_net_flow)    : null
+    const prsnFlow   = latest?.prsn_net_flow    != null ? Number(latest.prsn_net_flow)    : null
 
     // 3. Fear & Greed (시장 전체, Alternative.me 무료)
     let fearGreed = 50
@@ -273,6 +276,11 @@ export async function GET(
       lgbmSignal,
       lgbmScore,
       fundamentals,
+      investorFlow: master.market_type === 'KR' ? {
+        foreign: frgnFlow,
+        institutional: orgnFlow,
+        individual: prsnFlow,
+      } : null,
     })
   } catch (err) {
     const message =

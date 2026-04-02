@@ -67,6 +67,8 @@ export async function GET(req: NextRequest) {
     assetType: 'STOCK' | 'ETF',
     rawItems: any[],
     foreignNetBuy: number | null,
+    orgnNetBuy: number | null = null,
+    prsnNetBuy: number | null = null,
   ) {
     if (!rawItems.length) {
       results.push({ symbol, status: 'no ohlcv data' })
@@ -131,6 +133,8 @@ export async function GET(req: NextRequest) {
           bollinger_upper, bollinger_middle, bollinger_lower,
           stoch_k, stoch_d,
           ...(foreignNetBuy !== null ? { foreign_net_flow: foreignNetBuy } : {}),
+          ...(orgnNetBuy    !== null ? { orgn_net_flow:    orgnNetBuy }    : {}),
+          ...(prsnNetBuy    !== null ? { prsn_net_flow:    prsnNetBuy }    : {}),
         },
         { onConflict: 'market_master_id,as_of_date' }
       )
@@ -139,45 +143,65 @@ export async function GET(req: NextRequest) {
     results.push({ symbol, status: 'ok', close: closes[closes.length - 1] })
   }
 
+  const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+
   // ── 주식 수집 ────────────────────────────────────────────────────────────────
   for (const [symbol, name] of Object.entries(KR_STOCKS)) {
     try {
       const raw = await getKisDailyOhlcv(symbol, startDate, endDate)
       const items: any[] = raw?.output2 ?? []
 
-      // 외국인 순매수 거래대금(원) — output1[0] = 당일
+      // 외국인/기관/개인 순매수 거래대금(원) — 백만원 × 1e6 변환
       let foreignNetBuy: number | null = null
+      let orgnNetBuy:    number | null = null
+      let prsnNetBuy:    number | null = null
       try {
+        await delay(300) // KIS rate limit 방지
         const flowRaw = await getKisInvestorFlow(symbol)
-        const flowToday = flowRaw?.output1?.[0]
-        const amt = flowToday?.frgn_ntby_tr_pbmn ?? flowToday?.frgn_ntby_qty
-        if (amt != null) foreignNetBuy = parseFloat(amt)
+        const flowRows: any[] = flowRaw?.output ?? []
+        const flowRow = flowRows.find((r: any) => r.frgn_ntby_tr_pbmn !== '' && r.frgn_ntby_tr_pbmn != null)
+        if (flowRow) {
+          const toWon = (v: string | null) => v != null && v !== '' ? parseFloat(v) * 1e6 : null
+          foreignNetBuy = toWon(flowRow.frgn_ntby_tr_pbmn) ?? (flowRow.frgn_ntby_qty != null ? parseFloat(flowRow.frgn_ntby_qty) : null)
+          orgnNetBuy    = toWon(flowRow.orgn_ntby_tr_pbmn)
+          prsnNetBuy    = toWon(flowRow.prsn_ntby_tr_pbmn)
+        }
       } catch { /* 수급 데이터 실패 시 무시 */ }
 
-      await processOhlcv(symbol, name, 'STOCK', items, foreignNetBuy)
+      await processOhlcv(symbol, name, 'STOCK', items, foreignNetBuy, orgnNetBuy, prsnNetBuy)
     } catch (err) {
       results.push({ symbol, status: err instanceof Error ? err.message : 'error' })
     }
+    await delay(300) // 종목 간 딜레이
   }
 
   // ── ETF 수집 ─────────────────────────────────────────────────────────────────
   for (const [symbol, name] of Object.entries(KR_ETFS)) {
     try {
       const raw = await getKisEtfDailyOhlcv(symbol, startDate, endDate)
-      const items: any[] = raw?.output2 ?? []
+      const items: any[] = raw?.output2?.length ? raw.output2 : (raw?.output ?? [])
 
       let foreignNetBuy: number | null = null
+      let orgnNetBuy:    number | null = null
+      let prsnNetBuy:    number | null = null
       try {
+        await delay(300)
         const flowRaw = await getKisEtfInvestorFlow(symbol)
-        const flowToday = flowRaw?.output1?.[0]
-        const amt = flowToday?.frgn_ntby_tr_pbmn ?? flowToday?.frgn_ntby_qty
-        if (amt != null) foreignNetBuy = parseFloat(amt)
+        const flowRows: any[] = flowRaw?.output ?? []
+        const flowRow = flowRows.find((r: any) => r.frgn_ntby_tr_pbmn !== '' && r.frgn_ntby_tr_pbmn != null)
+        if (flowRow) {
+          const toWon = (v: string | null) => v != null && v !== '' ? parseFloat(v) * 1e6 : null
+          foreignNetBuy = toWon(flowRow.frgn_ntby_tr_pbmn) ?? (flowRow.frgn_ntby_qty != null ? parseFloat(flowRow.frgn_ntby_qty) : null)
+          orgnNetBuy    = toWon(flowRow.orgn_ntby_tr_pbmn)
+          prsnNetBuy    = toWon(flowRow.prsn_ntby_tr_pbmn)
+        }
       } catch { /* 수급 데이터 실패 시 무시 */ }
 
-      await processOhlcv(symbol, name, 'ETF', items, foreignNetBuy)
+      await processOhlcv(symbol, name, 'ETF', items, foreignNetBuy, orgnNetBuy, prsnNetBuy)
     } catch (err) {
       results.push({ symbol, status: err instanceof Error ? err.message : 'error' })
     }
+    await delay(300)
   }
 
   return NextResponse.json({ ok: true, date: endDate, results })

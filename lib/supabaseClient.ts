@@ -169,7 +169,7 @@ export async function getDailyIndicatorsBySymbol(symbol: string, limit = 30) {
   if (!master) return []
   const { data, error } = await supabase
     .from('daily_indicators')
-    .select('as_of_date,open,high,low,close,volume,rsi,macd,signal_line,sma_50,sma_120,sma_200,bollinger_upper,bollinger_middle,bollinger_lower,stoch_k,stoch_d')
+    .select('as_of_date,open,high,low,close,volume,rsi,macd,signal_line,sma_50,sma_120,sma_200,bollinger_upper,bollinger_middle,bollinger_lower,stoch_k,stoch_d,foreign_net_flow,orgn_net_flow,prsn_net_flow')
     .eq('market_master_id', master.id)
     .order('as_of_date', { ascending: false })
     .limit(limit)

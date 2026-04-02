@@ -178,6 +178,10 @@ export default function DetailPage() {
         ))}
       </div>
 
+      {/* ── 탭별 레이아웃 ─────────────────────────────────────────────── */}
+
+      {/* 일간 탭: ETF 신호 + 기술지표 (left) / 섹터 히트맵 (right) */}
+      {activeTab === 0 && (
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
 
@@ -401,6 +405,211 @@ export default function DetailPage() {
           </div>
         </div>
       </div>
+      )}
+
+      {/* 주간 탭: 기술지표 + AI 리포트 / 섹터 히트맵 */}
+      {activeTab === 1 && (
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2 space-y-6">
+            {/* Technical Indicators */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+              <div className="px-5 pt-5 pb-3 border-b border-slate-100">
+                <h3 className="font-bold text-slate-900">최근 지표 요약</h3>
+                <p className="text-xs text-slate-400">주간 기준 기술 지표 흐름</p>
+              </div>
+              <div className="p-5 space-y-4">
+                {detailLoading ? [0,1,2,3].map(i => <div key={i} className="animate-pulse rounded-xl bg-slate-100 h-20" />)
+                  : indicatorDetail.map(({ label, value, max, badge, cls, desc, color }) => (
+                    <div key={label} className="rounded-xl bg-slate-50 p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="font-semibold text-slate-800 text-sm">{label}</p>
+                        <span className={cls}>{badge}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="flex-1 h-2 rounded-full bg-slate-200 overflow-hidden">
+                          <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${(value / max) * 100}%` }} />
+                        </div>
+                        <span className="text-sm font-bold text-slate-900 w-10 text-right shrink-0">{value}</span>
+                      </div>
+                      <p className="text-xs text-slate-500 leading-relaxed">{desc}</p>
+                    </div>
+                  ))}
+              </div>
+            </div>
+            {/* AI 리포트 */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+              <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center gap-2">
+                <SparklesIcon />
+                <h3 className="font-bold text-slate-900 text-sm">AI 리포트</h3>
+              </div>
+              <div className="px-4 pt-3 flex gap-1.5 flex-wrap">
+                {aiReportTabs.map((t, i) => (
+                  <button key={t} onClick={() => setReportTab(i)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${reportTab === i ? `${accentBg} text-white` : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600 leading-relaxed border border-slate-100">
+                  <strong className="text-slate-900 block mb-2">{d.reportContent[reportTab].title}</strong>
+                  <p>{d.reportContent[reportTab].body}</p>
+                </div>
+                <Link href="/history" className={`flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-white transition-colors ${accentBg}`}>
+                  <SparklesIcon />AI 리포트 생성
+                </Link>
+              </div>
+            </div>
+          </div>
+          {/* 섹터 히트맵 */}
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+              <div className="px-5 pt-5 pb-3 border-b border-slate-100">
+                <h3 className="font-bold text-slate-900">섹터 히트맵</h3>
+                <p className="text-xs text-slate-400">AI 점수 (0~100)</p>
+              </div>
+              <div className="p-4 space-y-3">
+                {detailLoading ? [0,1,2,3,4].map(i => <div key={i} className="animate-pulse h-8 rounded-lg bg-slate-100" />)
+                  : (detailApiData?.sectorData ?? d.sectorData).map(({ name, score, change, up }) => (
+                    <div key={name}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-slate-700">{name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{change}</span>
+                          <span className="text-xs font-bold text-slate-900 w-6 text-right">{score}</span>
+                        </div>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                        <div className={`h-full rounded-full ${score >= 75 ? 'bg-emerald-500' : score >= 50 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${score}%` }} />
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 섹터별 탭: 섹터 히트맵 + 기술지표 나란히 */}
+      {activeTab === 2 && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+            <div className="px-5 pt-5 pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900">섹터 히트맵</h3>
+              <p className="text-xs text-slate-400">AI 점수 기준 섹터 강도</p>
+            </div>
+            <div className="p-4 space-y-3">
+              {detailLoading ? [0,1,2,3,4].map(i => <div key={i} className="animate-pulse h-8 rounded-lg bg-slate-100" />)
+                : (detailApiData?.sectorData ?? d.sectorData).map(({ name, score, change, up }) => (
+                  <div key={name}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-slate-700">{name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{change}</span>
+                        <span className="text-xs font-bold text-slate-900 w-6 text-right">{score}</span>
+                      </div>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                      <div className={`h-full rounded-full ${score >= 75 ? 'bg-emerald-500' : score >= 50 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${score}%` }} />
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+            <div className="px-5 pt-5 pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900">최근 지표 요약</h3>
+              <p className="text-xs text-slate-400">섹터별 기술 지표 참고</p>
+            </div>
+            <div className="p-5 space-y-4">
+              {detailLoading ? [0,1,2,3].map(i => <div key={i} className="animate-pulse rounded-xl bg-slate-100 h-20" />)
+                : indicatorDetail.map(({ label, value, max, badge, cls, desc, color }) => (
+                  <div key={label} className="rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-semibold text-slate-800 text-sm">{label}</p>
+                      <span className={cls}>{badge}</span>
+                    </div>
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="flex-1 h-2 rounded-full bg-slate-200 overflow-hidden">
+                        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${(value / max) * 100}%` }} />
+                      </div>
+                      <span className="text-sm font-bold text-slate-900 w-10 text-right shrink-0">{value}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">{desc}</p>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 커스텀 탭: ETF 신호 + AI 리포트 */}
+      {activeTab === 3 && (
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+              <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900">ETF 신호 목록</h3>
+                  <p className="text-xs text-slate-400">커스텀 필터 기준 ETF 순위</p>
+                </div>
+                <span className="badge-up">신호</span>
+              </div>
+              {detailLoading ? (
+                <div className="p-4 space-y-3">{[0,1,2,3,4,5].map(i => <div key={i} className="animate-pulse h-12 rounded-lg bg-slate-100" />)}</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {paginatedEtfs.map(({ ticker, name, price, change, signal, score, up }) => (
+                    <div key={ticker} className="px-5 py-3 flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold text-slate-900 text-sm">{name}</p>
+                        <p className="text-[10px] text-slate-400 font-mono">{ticker}</p>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="font-mono text-sm text-slate-800">{price}</span>
+                        <span className={`text-sm font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>{change}</span>
+                        <span className={`text-xs font-bold rounded-full px-2.5 py-1 ${signal === '매수' ? 'bg-emerald-50 text-emerald-600' : signal === '관망' ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-600'}`}>{signal}</span>
+                        <span className={`text-xs font-bold w-8 text-right ${score > 0 ? 'text-emerald-600' : 'text-red-500'}`}>{score > 0 ? '+' : ''}{score}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between px-5 pb-5 pt-4 text-xs text-slate-500">
+                <button className="rounded-full border border-slate-200 px-3 py-1 hover:border-slate-300 disabled:opacity-40" onClick={() => setCurrentEtfPage(p => Math.max(1,p-1))} disabled={currentEtfPage===1}>이전</button>
+                <span>{currentEtfPage} / {totalEtfPages}</span>
+                <button className="rounded-full border border-slate-200 px-3 py-1 hover:border-slate-300 disabled:opacity-40" onClick={() => setCurrentEtfPage(p => Math.min(totalEtfPages,p+1))} disabled={currentEtfPage===totalEtfPages}>다음</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+              <div className="px-5 pt-5 pb-3 border-b border-slate-100 flex items-center gap-2">
+                <SparklesIcon />
+                <h3 className="font-bold text-slate-900 text-sm">AI 리포트</h3>
+              </div>
+              <div className="px-4 pt-3 flex gap-1.5 flex-wrap">
+                {aiReportTabs.map((t, i) => (
+                  <button key={t} onClick={() => setReportTab(i)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${reportTab === i ? `${accentBg} text-white` : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600 leading-relaxed border border-slate-100">
+                  <strong className="text-slate-900 block mb-2">{d.reportContent[reportTab].title}</strong>
+                  <p>{d.reportContent[reportTab].body}</p>
+                </div>
+                <Link href="/history" className={`flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-white transition-colors ${accentBg}`}>
+                  <SparklesIcon />AI 리포트 생성
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

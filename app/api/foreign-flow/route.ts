@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
       .from('foreign_flow')
       .select('as_of_date, net_buy, futures_position, program_trading')
       .eq('market', market)
+      .neq('net_buy', 0)
       .order('as_of_date', { ascending: false })
       .limit(1)
 

@@ -3,7 +3,7 @@
  * 주요 종목 기준 외국인/기관/개인 순매수 수급 수집 → foreign_flow 테이블 upsert
  *
  * 스케줄: 평일 07:10 UTC (한국시간 16:10 — KRX 장마감 후)
- * - inquire-investor (FHKST01010900) 종목별 output1[0] 합산 방식
+ * - inquire-investor (FHKST01010900) 종목별 합산 방식 (output 배열에서 확정 데이터 행 사용)
  * - net_buy        = 외국인 순매수 거래대금(원) 합계
  * - futures_position = 기관 순매수 거래대금(원) 합계
  * - program_trading  = 개인 순매수 거래대금(원) 합계
@@ -45,17 +45,21 @@ export async function GET(req: NextRequest) {
     for (const symbol of KR_SYMBOLS) {
       try {
         const raw = await getKisInvestorFlow(symbol)
-        // output1: 당일 포함 최근 영업일 배열, [0] = 당일
-        const row = raw?.output1?.[0]
+        // output: 최근 영업일 배열 (최신순)
+        // output[0]은 당일 장중/미확정이라 빈 값일 수 있으므로 실데이터가 있는 첫 행 사용
+        const rows: any[] = raw?.output ?? []
+        const row = rows.find((r: any) => r.frgn_ntby_tr_pbmn !== '' && r.frgn_ntby_tr_pbmn != null)
 
         if (!row) {
           symbolResults[symbol] = 'no data'
           continue
         }
 
-        const frgnAmt   = parseFloat(row.frgn_ntby_tr_pbmn   ?? '0') || 0
-        const orgnAmt   = parseFloat(row.orgn_ntby_tr_pbmn   ?? '0') || 0
-        const indvdlAmt = parseFloat(row.indvdl_ntby_tr_pbmn ?? '0') || 0
+        // frgn_ntby_tr_pbmn 단위: 백만원 → 원으로 변환 (× 1e6)
+        const toWon = (v: string) => (parseFloat(v) || 0) * 1e6
+        const frgnAmt   = toWon(row.frgn_ntby_tr_pbmn)
+        const orgnAmt   = toWon(row.orgn_ntby_tr_pbmn)
+        const indvdlAmt = toWon(row.prsn_ntby_tr_pbmn)
 
         totalFrgn   += frgnAmt
         totalOrgn   += orgnAmt
@@ -63,7 +67,7 @@ export async function GET(req: NextRequest) {
         successCount++
         symbolResults[symbol] = 'ok'
 
-        // 첫 번째 성공 종목의 영업일 기준으로 날짜 결정
+        // 실데이터가 있는 행의 영업일 기준으로 날짜 결정
         if (!asOfDate && row.stck_bsop_date) {
           const d = row.stck_bsop_date as string
           asOfDate = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`
@@ -73,10 +77,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (successCount === 0) {
+    if (successCount === 0 || (totalFrgn === 0 && totalOrgn === 0 && totalIndvdl === 0)) {
       return NextResponse.json({
         ok: false,
-        reason: 'No investor flow data from any symbol',
+        reason: successCount === 0 ? 'No investor flow data from any symbol' : 'All values are zero — skipping DB write',
         symbolResults,
       })
     }

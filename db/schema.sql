@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS daily_indicators (
   stoch_k numeric(6, 2),
   stoch_d numeric(6, 2),
   foreign_net_flow numeric(24, 4),
+  orgn_net_flow numeric(24, 4),
+  prsn_net_flow numeric(24, 4),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (market_master_id, as_of_date)
 );

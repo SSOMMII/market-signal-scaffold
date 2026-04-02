@@ -34,6 +34,11 @@ type Analysis = {
     debtRatio: number | null
     dividendYield: number | null
   } | null
+  investorFlow: {
+    foreign: number | null
+    institutional: number | null
+    individual: number | null
+  } | null
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -323,6 +328,39 @@ function AnalysisView({
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* 투자자별 수급 (국내 종목만) */}
+        {analysis.investorFlow && (() => {
+          const { foreign, institutional, individual } = analysis.investorFlow
+          if (foreign === null && institutional === null && individual === null) return null
+          const fmt = (v: number | null) => {
+            if (v === null) return '-'
+            const eok = Math.round(v / 1e8)
+            return (eok >= 0 ? '+' : '') + eok.toLocaleString('ko-KR') + '억'
+          }
+          const color = (v: number | null) =>
+            v === null ? 'text-slate-500' : v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-slate-400'
+          const rows = [
+            { label: '외국인', value: foreign },
+            { label: '기관',   value: institutional },
+            { label: '개인',   value: individual },
+          ]
+          return (
+            <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800">
+              <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-3">
+                투자자별 순매수 <span className="text-slate-700 normal-case font-normal">(전일 기준)</span>
+              </p>
+              <div className="space-y-2">
+                {rows.map(({ label, value }) => (
+                  <div key={label} className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">{label}</span>
+                    <span className={`text-sm font-bold ${color(value)}`}>{fmt(value)}</span>
+                  </div>
+                ))}
               </div>
             </div>
           )
